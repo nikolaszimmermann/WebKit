@@ -117,6 +117,9 @@ public:
     GLContext* skiaGLContext();
     GrDirectContext* skiaGrContext();
     unsigned msaaSampleCount() const;
+
+    bool usesAcceleratedRendering() const;
+    void setUsesAcceleratedRendering(bool);
 #endif
 
 protected:

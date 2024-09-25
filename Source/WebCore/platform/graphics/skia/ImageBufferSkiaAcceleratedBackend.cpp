@@ -64,7 +64,7 @@ std::unique_ptr<ImageBufferSkiaAcceleratedBackend> ImageBufferSkiaAcceleratedBac
         return nullptr;
 
     // We always want to accelerate the canvas when Accelerated2DCanvas setting is true, even if skia CPU is enabled.
-    if (parameters.purpose != RenderingPurpose::Canvas && !ProcessCapabilities::canUseAcceleratedBuffers())
+    if (parameters.purpose != RenderingPurpose::Canvas && !PlatformDisplay::sharedDisplay().usesAcceleratedRendering())
         return nullptr;
 
     auto* glContext = PlatformDisplay::sharedDisplay().skiaGLContext();

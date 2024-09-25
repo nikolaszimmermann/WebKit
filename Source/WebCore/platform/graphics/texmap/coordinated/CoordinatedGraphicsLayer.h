@@ -35,13 +35,12 @@
 #include "TransformationMatrix.h"
 #include <wtf/Function.h>
 #include <wtf/RunLoop.h>
-#include <wtf/WorkerPool.h>
 #include <wtf/text/StringHash.h>
 
 #if USE(SKIA)
 namespace WebCore {
 class BitmapTexture;
-class BitmapTexturePool;
+class SkiaThreadedPaintingPool;
 }
 #endif
 
@@ -65,8 +64,7 @@ public:
 #if USE(CAIRO)
     virtual Nicosia::PaintingEngine& paintingEngine() = 0;
 #elif USE(SKIA)
-    virtual BitmapTexturePool* skiaAcceleratedBitmapTexturePool() const = 0;
-    virtual WorkerPool* skiaUnacceleratedThreadedRenderingPool() const = 0;
+    virtual SkiaThreadedPaintingPool* skiaThreadedPaintingPool() const = 0;
 #endif
 
     virtual Ref<CoordinatedImageBackingStore> imageBackingStore(Ref<NativeImage>&&) = 0;
@@ -209,7 +207,7 @@ private:
     bool checkPendingStateChanges();
     bool checkContentLayerUpdated();
 
-    Ref<Nicosia::Buffer> paintTile(const IntRect&, const IntRect& mappedTileRect, float contentsScale);
+    Ref<Nicosia::Buffer> paintTile(const TiledBackingStore&, const IntRect&);
 
     void notifyFlushRequired();
 

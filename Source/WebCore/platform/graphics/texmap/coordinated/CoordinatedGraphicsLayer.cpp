@@ -1207,7 +1207,7 @@ void CoordinatedGraphicsLayer::updateContentBuffers()
 
             auto& tileRect = tile.rect();
             auto& dirtyRect = tile.dirtyRect();
-            auto buffer = paintTile(dirtyRect, layerState.mainBackingStore->mapToContents(dirtyRect), layerState.mainBackingStore->contentsScale());
+            auto buffer = paintTile(*layerState.mainBackingStore.get(), dirtyRect);
 
             WTFBeginSignpost(this, UpdateTileBackingStore, "rect %ix%i+%i+%i", tileRect.x(), tileRect.y(), tileRect.width(), tileRect.height());
 

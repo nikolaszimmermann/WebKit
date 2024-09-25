@@ -85,7 +85,35 @@ SkCanvas* Buffer::canvas()
 }
 #endif
 
-Ref<Buffer> UnacceleratedBuffer::create(const WebCore::IntSize& size, Flags flags)
+void Buffer::beginPainting()
+{
+    Locker locker { m_painting.lock };
+    ASSERT(m_painting.state == PaintingState::Complete);
+    m_painting.state = PaintingState::InProgress;
+}
+
+void Buffer::completePainting()
+{
+    Locker locker { m_painting.lock };
+    ASSERT(m_painting.state == PaintingState::InProgress);
+    m_painting.state = PaintingState::Complete;
+    m_painting.condition.notifyOne();
+
+#if USE(SKIA)
+    // Surface is no longer needed, destroy it (in the same thread that created it).
+    m_surface = nullptr;
+#endif
+}
+
+void Buffer::waitUntilPaintingComplete()
+{
+    Locker locker { m_painting.lock };
+    m_painting.condition.wait(m_painting.lock, [this] {
+        return m_painting.state == PaintingState::Complete;
+    });
+}
+
+Ref<Buffer> UnacceleratedBuffer::create(const IntSize& size, Flags flags)
 {
     return adoptRef(*new UnacceleratedBuffer(size, flags));
 }
@@ -138,29 +166,6 @@ bool UnacceleratedBuffer::tryEnsureSurface()
 }
 #endif
 
-void UnacceleratedBuffer::beginPainting()
-{
-    Locker locker { m_painting.lock };
-    ASSERT(m_painting.state == PaintingState::Complete);
-    m_painting.state = PaintingState::InProgress;
-}
-
-void UnacceleratedBuffer::completePainting()
-{
-    Locker locker { m_painting.lock };
-    ASSERT(m_painting.state == PaintingState::InProgress);
-    m_painting.state = PaintingState::Complete;
-    m_painting.condition.notifyOne();
-}
-
-void UnacceleratedBuffer::waitUntilPaintingComplete()
-{
-    Locker locker { m_painting.lock };
-    m_painting.condition.wait(m_painting.lock, [this] {
-        return m_painting.state == PaintingState::Complete;
-    });
-}
-
 #if USE(SKIA)
 Ref<Buffer> AcceleratedBuffer::create(Ref<BitmapTexture>&& texture)
 {
@@ -185,7 +190,7 @@ AcceleratedBuffer::~AcceleratedBuffer()
     });
 }
 
-WebCore::IntSize AcceleratedBuffer::size() const
+IntSize AcceleratedBuffer::size() const
 {
     return m_texture->size();
 }
@@ -220,18 +225,22 @@ bool AcceleratedBuffer::tryEnsureSurface()
 
 void AcceleratedBuffer::completePainting()
 {
-    auto* grContext = WebCore::PlatformDisplay::sharedDisplay().skiaGrContext();
-    if (WebCore::GLFence::isSupported()) {
+    auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();
+    if (GLFence::isSupported()) {
         grContext->flushAndSubmit(m_surface.get(), GrSyncCpu::kNo);
-        m_fence = WebCore::GLFence::create();
+        m_fence = GLFence::create();
         if (!m_fence)
             grContext->submit(GrSyncCpu::kYes);
     } else
         grContext->flushAndSubmit(m_surface.get(), GrSyncCpu::kYes);
+
+    Buffer::completePainting();
 }
 
 void AcceleratedBuffer::waitUntilPaintingComplete()
 {
+    Buffer::waitUntilPaintingComplete();
+
     if (!m_fence)
         return;
 

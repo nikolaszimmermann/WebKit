@@ -157,6 +157,16 @@ public:
         return m_sampleCount;
     }
 
+    bool usesAcceleratedRendering() const
+    {
+        return m_usesAcceleratedRendering;
+    }
+
+    void setUsesAcceleratedRendering(bool acceleratedRendering)
+    {
+        m_usesAcceleratedRendering = acceleratedRendering;
+    }
+
 private:
     explicit SkiaGLContext(PlatformDisplay& display)
         : m_runLoop(&RunLoop::current())
@@ -185,6 +195,7 @@ private:
     sk_sp<GrDirectContext> m_skiaGrContext WTF_GUARDED_BY_LOCK(m_lock);
     mutable Lock m_lock;
     unsigned m_sampleCount { 0 };
+    bool m_usesAcceleratedRendering { true };
 };
 #endif
 
@@ -211,6 +222,7 @@ GrDirectContext* PlatformDisplay::skiaGrContext()
 
 unsigned PlatformDisplay::msaaSampleCount() const
 {
+    RELEASE_ASSERT(s_skiaGLContext);
     return s_skiaGLContext->sampleCount();
 }
 
@@ -220,6 +232,17 @@ void PlatformDisplay::invalidateSkiaGLContexts()
     contexts.forEach([](auto& context) {
         context.invalidate();
     });
+}
+
+bool PlatformDisplay::usesAcceleratedRendering() const
+{
+    return s_skiaGLContext ? s_skiaGLContext->usesAcceleratedRendering() : false;
+}
+
+void PlatformDisplay::setUsesAcceleratedRendering(bool acceleratedRendering)
+{
+    if (s_skiaGLContext)
+        s_skiaGLContext->setUsesAcceleratedRendering(acceleratedRendering);
 }
 
 } // namespace WebCore
