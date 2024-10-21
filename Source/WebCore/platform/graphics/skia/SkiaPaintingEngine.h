@@ -26,6 +26,8 @@
 #pragma once
 
 #if USE(COORDINATED_GRAPHICS) && USE(SKIA)
+#include "BitmapTexturePool.h"
+#include <wtf/RefPtr.h>
 #include <wtf/TZoneMalloc.h>
 #include <wtf/Vector.h>
 #include <wtf/WorkerPool.h>
@@ -33,28 +35,44 @@
 namespace WebCore {
 class CoordinatedGraphicsLayer;
 class CoordinatedTileBuffer;
+class GraphicsContext;
 class IntRect;
+enum class RenderingMode : bool;
 
 namespace DisplayList {
 class DisplayList;
 }
 
-class SkiaThreadedPaintingPool {
-    WTF_MAKE_TZONE_ALLOCATED(SkiaThreadedPaintingPool);
-    WTF_MAKE_NONCOPYABLE(SkiaThreadedPaintingPool);
+class SkiaPaintingEngine {
+    WTF_MAKE_TZONE_ALLOCATED(SkiaPaintingEngine);
+    WTF_MAKE_NONCOPYABLE(SkiaPaintingEngine);
 public:
-    explicit SkiaThreadedPaintingPool(unsigned numberOfThreads);
-    ~SkiaThreadedPaintingPool() = default;
+    SkiaPaintingEngine(unsigned numberOfCPUThreads, unsigned numberOfGPUThreads);
+    ~SkiaPaintingEngine() = default;
 
-    static std::unique_ptr<SkiaThreadedPaintingPool> create();
+    static std::unique_ptr<SkiaPaintingEngine> create();
 
-    void postPaintingTask(Ref<CoordinatedTileBuffer>&, const CoordinatedGraphicsLayer&, const IntRect& dirtyRect);
+    static unsigned numberOfCPUPaintingThreads();
+    static unsigned numberOfGPUPaintingThreads();
+
+    bool canPerformAcceleratedRendering() const;
+    bool canPerformThreadedAcceleratedRendering() const;
+    bool canPerformThreadedUnacceleratedRendering() const;
+
+    Ref<CoordinatedTileBuffer> postPaintingTask(RenderingMode, const CoordinatedGraphicsLayer&, const IntRect& dirtyRect);
+    Ref<CoordinatedTileBuffer> performPaintingTask(RenderingMode, const CoordinatedGraphicsLayer&, const IntRect& dirtyRect);
 
 private:
+    Ref<CoordinatedTileBuffer> createBuffer(RenderingMode, const CoordinatedGraphicsLayer&, const IntSize&) const;
     std::unique_ptr<DisplayList::DisplayList> recordDisplayList(const CoordinatedGraphicsLayer&, const IntRect& dirtyRect) const;
-    static unsigned numberOfPaintingThreads();
+    void paintIntoGraphicsContext(const CoordinatedGraphicsLayer&, GraphicsContext&, const IntRect&) const;
 
-    Ref<WorkerPool> m_workerPool;
+    static bool paintDisplayListIntoBuffer(Ref<CoordinatedTileBuffer>&, DisplayList::DisplayList&);
+    bool paintGraphicsLayerIntoBuffer(Ref<CoordinatedTileBuffer>&, const CoordinatedGraphicsLayer&, const IntRect& dirtyRect) const;
+
+    RefPtr<WorkerPool> m_cpuWorkerPool;
+    RefPtr<WorkerPool> m_gpuWorkerPool;
+    std::unique_ptr<BitmapTexturePool> m_texturePool;
 };
 
 } // namespace WebCore

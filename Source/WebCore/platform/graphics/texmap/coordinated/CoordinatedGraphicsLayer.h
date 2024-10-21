@@ -38,9 +38,7 @@
 
 #if USE(SKIA)
 namespace WebCore {
-class BitmapTexture;
-class BitmapTexturePool;
-class SkiaThreadedPaintingPool;
+class SkiaPaintingEngine;
 }
 #endif
 
@@ -65,8 +63,7 @@ public:
 #if USE(CAIRO)
     virtual Nicosia::PaintingEngine& paintingEngine() = 0;
 #elif USE(SKIA)
-    virtual BitmapTexturePool* skiaAcceleratedBitmapTexturePool() const = 0;
-    virtual SkiaThreadedPaintingPool* skiaThreadedPaintingPool() const = 0;
+    virtual SkiaPaintingEngine& skiaPaintingEngine() const = 0;
 #endif
 
     virtual Ref<CoordinatedImageBackingStore> imageBackingStore(Ref<NativeImage>&&) = 0;
@@ -165,9 +162,6 @@ public:
     Vector<std::pair<String, double>> acceleratedAnimationsForTesting(const Settings&) const final;
 
     Ref<CoordinatedTileBuffer> paintTile(const IntRect&);
-#if USE(SKIA)
-    void paintIntoGraphicsContext(GraphicsContext&, const IntRect&) const;
-#endif
 
     float effectiveContentsScale() const;
 

@@ -63,7 +63,7 @@ class IntSize;
 class GraphicsLayer;
 class GraphicsLayerFactory;
 class NativeImage;
-class SkiaThreadedPaintingPool;
+class SkiaPaintingEngine;
 struct ViewportAttributes;
 }
 
@@ -146,8 +146,7 @@ private:
 #if USE(CAIRO)
     Nicosia::PaintingEngine& paintingEngine() override;
 #elif USE(SKIA)
-    WebCore::BitmapTexturePool* skiaAcceleratedBitmapTexturePool() const override { return m_skiaAcceleratedBitmapTexturePool.get(); }
-    WebCore::SkiaThreadedPaintingPool* skiaThreadedPaintingPool() const override { return m_skiaThreadedPaintingPool.get(); }
+    WebCore::SkiaPaintingEngine& skiaPaintingEngine() const override { return *m_skiaPaintingEngine.get(); }
 #endif
     Ref<WebCore::CoordinatedImageBackingStore> imageBackingStore(Ref<WebCore::NativeImage>&&) override;
 
@@ -201,8 +200,7 @@ private:
 #if USE(CAIRO)
     std::unique_ptr<Nicosia::PaintingEngine> m_paintingEngine;
 #elif USE(SKIA)
-    std::unique_ptr<WebCore::BitmapTexturePool> m_skiaAcceleratedBitmapTexturePool;
-    std::unique_ptr<WebCore::SkiaThreadedPaintingPool> m_skiaThreadedPaintingPool;
+    std::unique_ptr<WebCore::SkiaPaintingEngine> m_skiaPaintingEngine;
 #endif
     UncheckedKeyHashMap<uint64_t, Ref<WebCore::CoordinatedImageBackingStore>> m_imageBackingStores;
     struct {

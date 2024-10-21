@@ -28,90 +28,27 @@
 
 #if USE(COORDINATED_GRAPHICS) && USE(SKIA)
 #include "CoordinatedTileBuffer.h"
-#include "DisplayListDrawingContext.h"
-#include "GLContext.h"
-#include "GraphicsContextSkia.h"
-#include "PlatformDisplay.h"
-#include "SkiaThreadedPaintingPool.h"
-#include <skia/core/SkCanvas.h>
-#include <skia/core/SkColorSpace.h>
-#include <skia/gpu/ganesh/GrBackendSurface.h>
-#include <skia/gpu/ganesh/SkSurfaceGanesh.h>
-#include <skia/gpu/ganesh/gl/GrGLBackendSurface.h>
-#include <skia/gpu/ganesh/gl/GrGLDirectContext.h>
-#include <skia/gpu/ganesh/gl/GrGLInterface.h>
-#include <wtf/RunLoop.h>
-#include <wtf/SystemTracing.h>
-#include <wtf/Vector.h>
+#include "RenderingMode.h"
+#include "SkiaPaintingEngine.h"
 
 namespace WebCore {
 
-void CoordinatedGraphicsLayer::paintIntoGraphicsContext(GraphicsContext& context, const IntRect& dirtyRect) const
-{
-    IntRect initialClip(IntPoint::zero(), dirtyRect.size());
-    context.clip(initialClip);
-
-    if (!contentsOpaque()) {
-        context.setCompositeOperation(CompositeOperator::Copy);
-        context.fillRect(initialClip, Color::transparentBlack);
-        context.setCompositeOperation(CompositeOperator::SourceOver);
-    }
-
-    auto scale = effectiveContentsScale();
-    FloatRect clipRect(dirtyRect);
-    clipRect.scale(1 / scale);
-
-    context.translate(-dirtyRect.x(), -dirtyRect.y());
-    context.scale(scale);
-    paintGraphicsLayerContents(context, clipRect);
-}
-
 Ref<CoordinatedTileBuffer> CoordinatedGraphicsLayer::paintTile(const IntRect& dirtyRect)
 {
-    auto paintBuffer = [&](CoordinatedTileBuffer& buffer) {
-        buffer.beginPainting();
+    auto& paintingEngine = m_coordinator->skiaPaintingEngine();
 
-        if (auto* canvas = buffer.canvas()) {
-            canvas->save();
-            canvas->clear(SkColors::kTransparent);
+    // ### Asynchronous rendering on worker threads ###
+    if (paintingEngine.canPerformThreadedAcceleratedRendering())
+        return paintingEngine.postPaintingTask(RenderingMode::Accelerated, *this, dirtyRect);
 
-            GraphicsContextSkia context(*canvas, buffer.isBackedByOpenGL() ? RenderingMode::Accelerated : RenderingMode::Unaccelerated, RenderingPurpose::LayerBacking);
-            paintIntoGraphicsContext(context, dirtyRect);
+    if (paintingEngine.canPerformThreadedUnacceleratedRendering())
+        return paintingEngine.postPaintingTask(RenderingMode::Unaccelerated, *this, dirtyRect);
 
-            canvas->restore();
-        }
+    // ### Synchronous rendering on main thread ###
+    if (paintingEngine.canPerformAcceleratedRendering())
+        return paintingEngine.performPaintingTask(RenderingMode::Accelerated, *this, dirtyRect);
 
-        buffer.completePainting();
-    };
-
-    // Skia/GPU - accelerated rendering.
-    auto* skiaGLContext = PlatformDisplay::sharedDisplay().skiaGLContext();
-    if (auto* acceleratedBitmapTexturePool = m_coordinator->skiaAcceleratedBitmapTexturePool(); acceleratedBitmapTexturePool && skiaGLContext->makeContextCurrent()) {
-        OptionSet<BitmapTexture::Flags> textureFlags;
-        if (!contentsOpaque())
-            textureFlags.add(BitmapTexture::Flags::SupportsAlpha);
-
-        auto buffer = CoordinatedAcceleratedTileBuffer::create(acceleratedBitmapTexturePool->acquireTexture(dirtyRect.size(), textureFlags));
-        WTFBeginSignpost(this, PaintTile, "Skia accelerated, dirty region %ix%i+%i+%i", dirtyRect.x(), dirtyRect.y(), dirtyRect.width(), dirtyRect.height());
-        paintBuffer(buffer.get());
-        WTFEndSignpost(this, PaintTile);
-
-        return buffer;
-    }
-
-    auto buffer = CoordinatedUnacceleratedTileBuffer::create(dirtyRect.size(), contentsOpaque() ? CoordinatedTileBuffer::NoFlags : CoordinatedTileBuffer::SupportsAlpha);
-
-    // Skia/CPU - threaded unaccelerated rendering.
-    if (auto* workerPool = m_coordinator->skiaThreadedPaintingPool()) {
-        workerPool->postPaintingTask(buffer, *this, dirtyRect);
-        return buffer;
-    }
-
-    // Blocking, single-thread variant.
-    WTFBeginSignpost(this, PaintTile, "Skia unaccelerated, dirty region %ix%i+%i+%i", dirtyRect.x(), dirtyRect.y(), dirtyRect.width(), dirtyRect.height());
-    paintBuffer(buffer.get());
-    WTFEndSignpost(this, PaintTile);
-    return buffer;
+    return paintingEngine.performPaintingTask(RenderingMode::Unaccelerated, *this, dirtyRect);
 }
 
 } // namespace WebCore

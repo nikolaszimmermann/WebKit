@@ -52,8 +52,7 @@
 #if USE(CAIRO)
 #include <WebCore/NicosiaPaintingEngine.h>
 #elif USE(SKIA)
-#include <WebCore/ProcessCapabilities.h>
-#include <WebCore/SkiaThreadedPaintingPool.h>
+#include <WebCore/SkiaPaintingEngine.h>
 #endif
 
 #if USE(GLIB_EVENT_LOOP)
@@ -78,15 +77,10 @@ LayerTreeHost::LayerTreeHost(WebPage& webPage, WebCore::PlatformDisplayID displa
 #endif
 #if USE(CAIRO)
     , m_paintingEngine(Nicosia::PaintingEngine::create())
+#elif USE(SKIA)
+    , m_skiaPaintingEngine(SkiaPaintingEngine::create())
 #endif
 {
-#if USE(SKIA)
-    if (ProcessCapabilities::canUseAcceleratedBuffers() && PlatformDisplay::sharedDisplay().skiaGLContext())
-        m_skiaAcceleratedBitmapTexturePool = makeUnique<BitmapTexturePool>();
-    else
-        m_skiaThreadedPaintingPool = SkiaThreadedPaintingPool::create();
-#endif
-
     m_nicosia.scene = Nicosia::Scene::create();
     m_nicosia.sceneIntegration = Nicosia::SceneIntegration::create(*m_nicosia.scene, *this);
 
@@ -135,8 +129,7 @@ LayerTreeHost::~LayerTreeHost()
     }
 
 #if USE(SKIA)
-    m_skiaAcceleratedBitmapTexturePool = nullptr;
-    m_skiaThreadedPaintingPool = nullptr;
+    m_skiaPaintingEngine = nullptr;
 #endif
 
     m_compositor->invalidate();
