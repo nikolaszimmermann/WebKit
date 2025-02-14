@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 Igalia S.L.
+ * Copyright (C) 2024, 2025 Igalia S.L.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -53,8 +53,20 @@ public:
 
     static std::unique_ptr<SkiaPaintingEngine> create();
 
+    enum class HybridPaintingStrategy {
+        PreferCPUIfIdle,
+        PreferGPUIfIdle,
+        PreferGPUAboveMinimumArea,
+        MinimumFractionOfTasksUsingGPU,
+        CPUAffineRendering,
+        GPUAffineRendering
+    };
+
     static unsigned numberOfCPUPaintingThreads();
     static unsigned numberOfGPUPaintingThreads();
+    static unsigned minimumAreaForGPUPainting();
+    static float minimumFractionOfTasksUsingGPUPainting();
+    static HybridPaintingStrategy hybridPaintingStrategy();
 
     Ref<CoordinatedTileBuffer> paintLayer(const GraphicsLayer&, const IntRect& dirtyRect, bool contentsOpaque, float contentsScale);
 
@@ -72,12 +84,14 @@ private:
     // Main thread rendering
     Ref<CoordinatedTileBuffer> performPaintingTask(const GraphicsLayer&, RenderingMode, const IntRect& dirtyRect, bool contentsOpaque, float contentsScale);
 
-    RenderingMode renderingMode() const;
-    std::optional<RenderingMode> threadedRenderingMode() const;
+    RenderingMode renderingMode(const IntRect&) const;
+    std::optional<RenderingMode> threadedRenderingMode(const IntRect&) const;
+    bool shouldUseGPURenderingForDirtyRect(const IntRect&) const;
 
     RefPtr<WorkerPool> m_cpuWorkerPool;
     RefPtr<WorkerPool> m_gpuWorkerPool;
     std::unique_ptr<BitmapTexturePool> m_texturePool;
+    HybridPaintingStrategy m_strategy { HybridPaintingStrategy::CPUAffineRendering };
 };
 
 } // namespace WebCore

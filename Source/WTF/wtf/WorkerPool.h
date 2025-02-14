@@ -49,6 +49,8 @@ public:
 
     ASCIILiteral name() const { return m_name; }
 
+    unsigned numberOfTasks() const;
+
 private:
     class Worker;
     friend class Worker;
