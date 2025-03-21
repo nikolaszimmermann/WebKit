@@ -1041,11 +1041,9 @@ SkiaImageToFenceMap GraphicsContextSkia::endRecording()
     return WTFMove(m_imageToFenceMap);
 }
 
-std::unique_ptr<GLFence> GraphicsContextSkia::createAcceleratedRenderingFenceIfNeeded(const sk_sp<SkImage>& image)
+template<typename T>
+inline std::unique_ptr<GLFence> createAcceleratedRenderingFence(T object)
 {
-    if (!image || !image->isTextureBacked())
-        return nullptr;
-
     auto* glContext = PlatformDisplay::sharedDisplay().skiaGLContext();
     if (!glContext || !glContext->makeContextCurrent())
         return nullptr;
@@ -1053,7 +1051,7 @@ std::unique_ptr<GLFence> GraphicsContextSkia::createAcceleratedRenderingFenceIfN
     auto* grContext = PlatformDisplay::sharedDisplay().skiaGrContext();
     RELEASE_ASSERT(grContext);
 
-    grContext->flush(image);
+    grContext->flush(object);
 
     if (GLFence::isSupported()) {
         grContext->submit(GrSyncCpu::kNo);
@@ -1064,6 +1062,20 @@ std::unique_ptr<GLFence> GraphicsContextSkia::createAcceleratedRenderingFenceIfN
 
     grContext->submit(GrSyncCpu::kYes);
     return nullptr;
+}
+
+std::unique_ptr<GLFence> GraphicsContextSkia::createAcceleratedRenderingFenceIfNeeded(SkSurface* surface)
+{
+    if (!surface || !surface->recordingContext())
+        return nullptr;
+    return createAcceleratedRenderingFence<decltype(surface)>(surface);
+}
+
+std::unique_ptr<GLFence> GraphicsContextSkia::createAcceleratedRenderingFenceIfNeeded(const sk_sp<SkImage>& image)
+{
+    if (!image || !image->isTextureBacked())
+        return nullptr;
+    return createAcceleratedRenderingFence<decltype(image)>(image);
 }
 
 void GraphicsContextSkia::trackAcceleratedRenderingFenceIfNeeded(const sk_sp<SkImage>& image)
