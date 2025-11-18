@@ -63,7 +63,7 @@ std::unique_ptr<GLContext> GLContext::createWPEContext(GLDisplay& display, EGLCo
 {
     EGLDisplay eglDisplay = display.eglDisplay();
     EGLConfig config;
-    if (!getEGLConfig(eglDisplay, &config, EGL_WINDOW_BIT)) {
+    if (!getEGLConfig(eglDisplay, &config, EGL_WINDOW_BIT, OpenGLESMode::Version2)) {
         RELEASE_LOG_INFO(Compositing, "Cannot obtain EGL WPE context configuration: %s\n", lastErrorString());
         return nullptr;
     }

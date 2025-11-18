@@ -137,6 +137,7 @@ public:
     };
 
 private:
+    static std::pair<unsigned, unsigned> forcedEGLVersion();
     static EGLContext createContextForEGLVersion(EGLDisplay, EGLConfig, EGLContext);
 
     static std::unique_ptr<GLContext> createWindowContext(GLDisplay&, Target, GLNativeWindowType, EGLContext sharingContext);
@@ -150,7 +151,12 @@ private:
     void destroyWPETarget();
 #endif
 
-    static bool getEGLConfig(EGLDisplay, EGLConfig*, int);
+    enum class OpenGLESMode : uint8_t {
+        Version2,
+        Version3
+    };
+
+    static bool getEGLConfig(EGLDisplay, EGLConfig*, int, OpenGLESMode);
 
     // GLContextWrapper
     GLContextWrapper::Type type() const override { return GLContextWrapper::Type::Native; }

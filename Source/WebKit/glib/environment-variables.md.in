@@ -39,6 +39,17 @@ Example: `AR24:0:scanout`
 
 #endif
 
+- `WEBKIT_EGL_PIXEL_LAYOUT`:
+Specifies the pixel format for EGL rendering contexts. By default, WebKit uses an 8-8-8-8 RGBA format.
+Supported values:
+    - `RGB565` - Use 16-bit RGB565 format (5 bits red, 6 bits green, 5 bits blue)
+Example: `RGB565`
+
+- `WEBKIT_FORCE_EGL_VERSION`:
+Forces WebKit to use a specific OpenGL ES version for testing purposes. The value should be specified as a three-digit number in the format `MNN`, where `M` is the major version and `NN` is the minor version multiplied by 10. By default, WebKit attempts to create contexts in descending order: ES 3.2, 3.1, 3.0, then falls back to ES 2.0.
+Valid range: 200-320 (ES 2.0 through ES 3.2)
+Example: `310` (forces OpenGL ES 3.1)
+
 - `WEBKIT_SKIA_CPU_PAINTING_THREADS`:
 Specifies the amount of CPU worker threads to use for multi-threaded tile rendering using Skia.
 By default we use as much CPU worker threads as the amount of CPU cores in the system divided by two, capped at eight.

@@ -73,8 +73,15 @@ const char* GLContext::lastErrorString()
 }
 
 IGNORE_CLANG_WARNINGS_BEGIN("unsafe-buffer-usage-in-libc-call")
-bool GLContext::getEGLConfig(EGLDisplay display, EGLConfig* config, int surfaceType)
+bool GLContext::getEGLConfig(EGLDisplay display, EGLConfig* config, int surfaceType, OpenGLESMode mode)
 {
+    auto [forcedMajor, forcedMinor] = GLContext::forcedEGLVersion();
+    UNUSED_PARAM(forcedMinor);
+    if (forcedMajor == 3 && mode != OpenGLESMode::Version3)
+        return false;
+    if (forcedMajor == 2 && mode != OpenGLESMode::Version2)
+        return false;
+
     std::array<EGLint, 4> rgbaSize = { 8, 8, 8, 8 };
     if (const char* environmentVariable = getenv("WEBKIT_EGL_PIXEL_LAYOUT")) {
         if (!strcmp(environmentVariable, "RGB565"))
@@ -85,7 +92,7 @@ bool GLContext::getEGLConfig(EGLDisplay display, EGLConfig* config, int surfaceT
 
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN // GLib / Windows ports.
     EGLint attributeList[] = {
-        EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+        EGL_RENDERABLE_TYPE, mode == OpenGLESMode::Version3 ? EGL_OPENGL_ES3_BIT : EGL_OPENGL_ES2_BIT,
         EGL_RED_SIZE, rgbaSize[0],
         EGL_GREEN_SIZE, rgbaSize[1],
         EGL_BLUE_SIZE, rgbaSize[2],
@@ -134,9 +141,11 @@ std::unique_ptr<GLContext> GLContext::createWindowContext(GLDisplay& display, Ta
 {
     EGLDisplay eglDisplay = display.eglDisplay();
     EGLConfig config;
-    if (!getEGLConfig(eglDisplay, &config, EGL_WINDOW_BIT)) {
-        RELEASE_LOG_INFO(Compositing, "Cannot obtain EGL window context configuration: %s\n", lastErrorString());
-        return nullptr;
+    if (!getEGLConfig(eglDisplay, &config, EGL_WINDOW_BIT, OpenGLESMode::Version3)) {
+        if (!getEGLConfig(eglDisplay, &config, EGL_WINDOW_BIT, OpenGLESMode::Version2)) {
+            RELEASE_LOG_INFO(Compositing, "Cannot obtain EGL window context configuration: %s\n", lastErrorString());
+            return nullptr;
+        }
     }
 
     EGLContext context = createContextForEGLVersion(eglDisplay, config, sharingContext);
@@ -189,9 +198,12 @@ std::unique_ptr<GLContext> GLContext::createSurfacelessContext(GLDisplay& displa
     }
 
     EGLConfig config;
-    if (!getEGLConfig(eglDisplay, &config, target == Target::Surfaceless ? EGL_PBUFFER_BIT : EGL_WINDOW_BIT)) {
-        RELEASE_LOG_INFO(Compositing, "Cannot obtain EGL surfaceless configuration: %s\n", lastErrorString());
-        return nullptr;
+    int surfaceType = target == Target::Surfaceless ? EGL_PBUFFER_BIT : EGL_WINDOW_BIT;
+    if (!getEGLConfig(eglDisplay, &config, surfaceType, OpenGLESMode::Version3)) {
+        if (!getEGLConfig(eglDisplay, &config, surfaceType, OpenGLESMode::Version2)) {
+            RELEASE_LOG_INFO(Compositing, "Cannot obtain EGL surfaceless configuration: %s\n", lastErrorString());
+            return nullptr;
+        }
     }
 
     EGLContext context = createContextForEGLVersion(eglDisplay, config, sharingContext);
@@ -207,9 +219,11 @@ std::unique_ptr<GLContext> GLContext::createPbufferContext(GLDisplay& display, E
 {
     EGLDisplay eglDisplay = display.eglDisplay();
     EGLConfig config;
-    if (!getEGLConfig(eglDisplay, &config, EGL_PBUFFER_BIT)) {
-        RELEASE_LOG_INFO(Compositing, "Cannot obtain EGL Pbuffer configuration: %s\n", lastErrorString());
-        return nullptr;
+    if (!getEGLConfig(eglDisplay, &config, EGL_PBUFFER_BIT, OpenGLESMode::Version3)) {
+        if (!getEGLConfig(eglDisplay, &config, EGL_PBUFFER_BIT, OpenGLESMode::Version2)) {
+            RELEASE_LOG_INFO(Compositing, "Cannot obtain EGL Pbuffer configuration: %s\n", lastErrorString());
+            return nullptr;
+        }
     }
 
     EGLContext context = createContextForEGLVersion(eglDisplay, config, sharingContext);
@@ -356,21 +370,88 @@ RefPtr<GLDisplay> GLContext::display() const
     return m_display.get();
 }
 
+std::pair<unsigned, unsigned> GLContext::forcedEGLVersion()
+{
+    static std::once_flag onceFlag;
+    static unsigned majorVersion = 0;
+    static unsigned minorVersion = 0;
+
+    std::call_once(onceFlag, [] {
+        if (const char* envString = getenv("WEBKIT_FORCE_EGL_VERSION")) {
+            auto version = parseInteger<unsigned>(StringView::fromLatin1(envString)).value_or(0);
+            if (version >= 200 && version <= 320) {
+                majorVersion = version / 100;
+                minorVersion = (version % 100) / 10;
+                WTFLogAlways("WEBKIT_FORCE_EGL_VERSION=%d: Forcing OpenGL ES %d.%d", version, majorVersion, minorVersion);
+            } else
+                WTFLogAlways("WEBKIT_FORCE_EGL_VERSION=%d: Invalid version string, must be >= 200 <= 320", version);
+        }
+    });
+
+    return std::make_pair(majorVersion, minorVersion);
+}
+
 EGLContext GLContext::createContextForEGLVersion(EGLDisplay eglDisplay, EGLConfig config, EGLContext sharingContext)
 {
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN // GLib / Windows ports.
-    static EGLint contextAttributes[3];
+    static EGLint contextAttributes[7];
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
     static bool contextAttributesInitialized = false;
 
     if (!contextAttributesInitialized) {
         contextAttributesInitialized = true;
 
-        contextAttributes[0] = EGL_CONTEXT_CLIENT_VERSION;
-        contextAttributes[1] = 2;
-        contextAttributes[2] = EGL_NONE;
+        struct VersionAttempt {
+            unsigned major { 0 };
+            unsigned minor { 0 };
+        };
+
+        // Try versions in descending order: 3.2 -> 3.1 -> 3.0 -> 2.0.
+        WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN // GLib / Windows ports.
+        static const VersionAttempt versions[] = {
+            { 3, 2 },
+            { 3, 1 },
+            { 3, 0 },
+            { 2, 0 }
+        };
+        WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
+
+        // Check for forced version via environment variable
+        auto [forcedMajor, forcedMinor] = GLContext::forcedEGLVersion();
+
+        bool versionFound = false;
+        for (const auto& version : versions) {
+            // If version is forced, skip versions that don't match
+            if (forcedMajor && (version.major != forcedMajor || version.minor != forcedMinor))
+                continue;
+
+            // Success! Cache these attributes for future use
+            contextAttributes[0] = EGL_CONTEXT_MAJOR_VERSION;
+            contextAttributes[1] = version.major;
+            contextAttributes[2] = EGL_CONTEXT_MINOR_VERSION;
+            contextAttributes[3] = version.minor;
+            contextAttributes[4] = EGL_CONTEXT_CLIENT_VERSION;
+            contextAttributes[5] = version.major;
+            contextAttributes[6] = EGL_NONE;
+
+            auto context = eglCreateContext(eglDisplay, config, sharingContext, contextAttributes);
+            if (context != EGL_NO_CONTEXT) {
+                RELEASE_LOG_INFO(Compositing, "WebKit will use OpenGL ES %d.%d for accelerated content", version.major, version.minor);
+
+                versionFound = true;
+                return context;
+            }
+
+            RELEASE_LOG_INFO(Compositing, "Failed to create OpenGL ES %d.%d context: %s. Trying lower version...", version.major, version.minor, lastErrorString());
+        }
+
+        if (!versionFound) {
+            RELEASE_LOG_INFO(Compositing, "Failed to create any OpenGL ES context");
+            return EGL_NO_CONTEXT;
+        }
     }
 
+    // Create context using cached attributes
     return eglCreateContext(eglDisplay, config, sharingContext, contextAttributes);
 }
 
@@ -587,12 +668,14 @@ EGLConfig GLContext::eglConfig() const
     if (!display)
         return nullptr;
 
-    if (!getEGLConfig(display->eglDisplay(), &config, WindowSurface)) {
-        WTFLogAlways("Cannot obtain EGL window context configuration: %s\n", lastErrorString());
-        config = nullptr;
-        ASSERT_NOT_REACHED();
+    auto eglDisplay = display->eglDisplay();
+    if (!getEGLConfig(eglDisplay, &config, WindowSurface, OpenGLESMode::Version3)) {
+        if (!getEGLConfig(eglDisplay, &config, WindowSurface, OpenGLESMode::Version2)) {
+            WTFLogAlways("Cannot obtain EGL window context configuration: %s\n", lastErrorString());
+            config = nullptr;
+            ASSERT_NOT_REACHED();
+        }
     }
-
     return config;
 }
 
