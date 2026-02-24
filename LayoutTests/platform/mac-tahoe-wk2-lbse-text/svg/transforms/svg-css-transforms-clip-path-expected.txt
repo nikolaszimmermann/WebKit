@@ -25,10 +25,8 @@ layer at (28,85.81) size 200x200
     RenderText {#text} at (0,0) size 0x0
 layer at (29,87) size 198x198
   RenderSVGRoot {svg} at (1,1) size 198x198
-layer at (29,86.81) size 198x198
-  RenderSVGViewportContainer at (0,0) size 198x198
-layer at (19,76.81) size 40x40 backgroundClip at (29,86.81) size 198x198 clip at (29,86.81) size 198x198
-  RenderSVGHiddenContainer {defs} at (-10,-10) size 40x40
+    RenderSVGViewportContainer at (0,0) size 198x198
+      RenderSVGHiddenContainer {defs} at (-10,-10) size 40x40
 layer at (19,76.81) size 40x40 backgroundClip at (29,86.81) size 198x198 clip at (29,86.81) size 198x198
   RenderSVGEllipse {circle} at (0,0) size 40x40 [fill={[type=SOLID] [color=#000000]}] [cx=10.00] [cy=10.00] [r=20.00]
 layer at (19,76.81) size 40x40 backgroundClip at (29,86.81) size 198x198 clip at (29,86.81) size 198x198
@@ -44,10 +42,8 @@ layer at (28,353.63) size 200x200
     RenderText {#text} at (0,0) size 0x0
 layer at (29,355) size 198x198
   RenderSVGRoot {svg} at (1,1) size 198x198
-layer at (29,354.63) size 198x198
-  RenderSVGViewportContainer at (0,0) size 198x198
-layer at (19,344.63) size 40x40 backgroundClip at (29,354.63) size 198x198 clip at (29,354.63) size 198x198
-  RenderSVGHiddenContainer {defs} at (-10,-10) size 40x40
+    RenderSVGViewportContainer at (0,0) size 198x198
+      RenderSVGHiddenContainer {defs} at (-10,-10) size 40x40
 layer at (19,344.63) size 40x40 backgroundClip at (29,354.63) size 198x198 clip at (29,354.63) size 198x198
   RenderSVGEllipse {circle} at (0,0) size 40x40 [fill={[type=SOLID] [color=#000000]}] [cx=10.00] [cy=10.00] [r=20.00]
 layer at (19,344.63) size 40x40 backgroundClip at (29,354.63) size 198x198 clip at (29,354.63) size 198x198
@@ -63,10 +59,8 @@ layer at (272,85.81) size 200x200
     RenderText {#text} at (0,0) size 0x0
 layer at (273,87) size 198x198
   RenderSVGRoot {svg} at (1,1) size 198x198
-layer at (273,86.81) size 198x198
-  RenderSVGViewportContainer at (0,0) size 198x198
-layer at (274,87.81) size 40x40
-  RenderSVGHiddenContainer {defs} at (1,1) size 40x40
+    RenderSVGViewportContainer at (0,0) size 198x198
+      RenderSVGHiddenContainer {defs} at (1,1) size 40x40
 layer at (274,87.81) size 40x40
   RenderSVGRect {rect} at (0,0) size 40x40 [fill={[type=SOLID] [color=#000000]}] [x=1.00] [y=1.00] [width=40.00] [height=40.00]
 layer at (274,87.81) size 40x40
@@ -82,10 +76,8 @@ layer at (272,353.63) size 200x200
     RenderText {#text} at (0,0) size 0x0
 layer at (273,355) size 198x198
   RenderSVGRoot {svg} at (1,1) size 198x198
-layer at (273,354.63) size 198x198
-  RenderSVGViewportContainer at (0,0) size 198x198
-layer at (274,355.63) size 40x40
-  RenderSVGHiddenContainer {defs} at (1,1) size 40x40
+    RenderSVGViewportContainer at (0,0) size 198x198
+      RenderSVGHiddenContainer {defs} at (1,1) size 40x40
 layer at (274,355.63) size 40x40
   RenderSVGRect {rect} at (0,0) size 40x40 [fill={[type=SOLID] [color=#000000]}] [x=1.00] [y=1.00] [width=40.00] [height=40.00]
 layer at (274,355.63) size 40x40

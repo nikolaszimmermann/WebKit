@@ -4,10 +4,18 @@ layer at (0,0) size 400x400
   RenderSVGRoot {svg} at (0,0) size 400x400
 layer at (0,0) size 400x400
   RenderSVGViewportContainer at (0,0) size 400x400
-layer at (10,10.50) size 49x5
-  RenderSVGText {text} at (10,10) size 50x7 contains 1 chunk(s)
-    RenderSVGInlineText {#text} at (0,0) size 50x6
-      chunk 1 text run 1 at (10.00,15.00) startOffset 0 endOffset 21 width 49.29: "SVG Performance test."
+    RenderSVGText {text} at (10,10) size 50x7 contains 1 chunk(s)
+      RenderSVGInlineText {#text} at (0,0) size 50x6
+        chunk 1 text run 1 at (10.00,15.00) startOffset 0 endOffset 21 width 49.29: "SVG Performance test."
+    RenderSVGText {text} at (10,90) size 33x7 contains 1 chunk(s)
+      RenderSVGInlineText {#text} at (0,0) size 33x6
+        chunk 1 text run 1 at (10.00,95.00) startOffset 0 endOffset 14 width 32.35: "Test completed"
+    RenderSVGRect {rect} at (0,0) size 100x100 [stroke={[type=SOLID] [color=#000000]}] [x=0.00] [y=0.00] [width=100.00] [height=100.00]
+    RenderSVGResourceLinearGradient {linearGradient} at (0,0) size 0x0
+      RenderSVGGradientStop {stop} [offset=0.00] [color=#0000FF]
+      RenderSVGGradientStop {stop} [offset=0.10] [color=#FF6600]
+      RenderSVGGradientStop {stop} [offset=0.90] [color=#FFFF66]
+      RenderSVGGradientStop {stop} [offset=1.00] [color=#0000FF]
 layer at (-0.91,22.50) size 20x40 backgroundClip at (0,0) size 400x400 clip at (0,0) size 400x400
   RenderSVGRect {rect} at (-0.91,22.50) size 19.81x39 [fill={[type=SOLID] [color=#00000000]}] [x=-0.90] [y=22.50] [width=19.80] [height=39.00]
 layer at (48.50,47.50) size 34x66
@@ -208,9 +216,3 @@ layer at (6.92,-12.94) size 16x28 backgroundClip at (0,0) size 400x400 clip at (
   RenderSVGRect {rect} at (6.92,-12.94) size 14.16x27.88 [fill={[type=SOLID] [color=#00000000]}] [x=6.93] [y=-12.93] [width=14.14] [height=27.86]
 layer at (-9.50,37.50) size 34x66 backgroundClip at (0,0) size 400x400 clip at (0,0) size 400x400
   RenderSVGRect {rect} at (-9.50,37.50) size 33x65 [fill={[type=SOLID] [color=#00000000]}] [x=-9.50] [y=37.50] [width=33.00] [height=65.00]
-layer at (10,90.50) size 32x5
-  RenderSVGText {text} at (10,90) size 33x7 contains 1 chunk(s)
-    RenderSVGInlineText {#text} at (0,0) size 33x6
-      chunk 1 text run 1 at (10.00,95.00) startOffset 0 endOffset 14 width 32.35: "Test completed"
-layer at (0,0) size 100x100
-  RenderSVGRect {rect} at (0,0) size 100x100 [stroke={[type=SOLID] [color=#000000]}] [x=0.00] [y=0.00] [width=100.00] [height=100.00]
