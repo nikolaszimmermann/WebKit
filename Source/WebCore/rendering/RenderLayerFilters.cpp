@@ -189,10 +189,29 @@ GraphicsContext* RenderLayerFilters::beginFilterEffect(RenderElement& renderer, 
         return existingGeometry.referenceBox != newGeometry.referenceBox || existingGeometry.scale != newGeometry.scale;
     };
 
+    // In LBSE, SVG transforms (viewBox, transform attribute, etc.) are stored on layers.
+    // Walk up the layer tree to accumulate the transform scale so the filter buffer is
+    // rendered at screen resolution, matching the legacy engine's behavior of using
+    // calculateTransformationToOutermostCoordinateSystem() for filter scale.
+    auto filterScale = m_filterScale;
+    if (renderer.isSVGLayerAwareRenderer()) {
+        AffineTransform accumulatedTransform;
+        for (auto* layer = renderer.enclosingLayer(); layer; layer = layer->parent()) {
+            if (auto* layerTransform = layer->transform())
+                accumulatedTransform = layerTransform->toAffineTransform() * accumulatedTransform;
+            if (layer->renderer().isRenderSVGRoot())
+                break;
+        }
+        filterScale = {
+            m_filterScale.width() * narrowPrecisionToFloat(accumulatedTransform.xScale()),
+            m_filterScale.height() * narrowPrecisionToFloat(accumulatedTransform.yScale())
+        };
+    }
+
     auto geometry = FilterGeometry {
         .referenceBox = filterBoxRect,
         .filterRegion = filterRegion,
-        .scale = m_filterScale,
+        .scale = filterScale,
     };
 
     bool hasUpdatedBackingStore = false;
@@ -229,7 +248,16 @@ GraphicsContext* RenderLayerFilters::beginFilterEffect(RenderElement& renderer, 
             sourceImageRect = renderer.objectBoundingBox();
         else
             sourceImageRect = dirtyFilterRegion;
-        m_targetSwitcher = GraphicsContextSwitcher::create(context, sourceImageRect, DestinationColorSpace::SRGB(), { WTF::move(filter) });
+
+        // SVG spec: color-interpolation-filters defaults to linearRGB, so SVG filter
+        // operations should happen in linear color space. Match legacy SVG filter behavior.
+        auto colorSpace = DestinationColorSpace::SRGB();
+#if !USE(CAIRO)
+        if (renderer.isSVGLayerAwareRenderer())
+            colorSpace = DestinationColorSpace::LinearSRGB();
+#endif
+
+        m_targetSwitcher = GraphicsContextSwitcher::create(context, sourceImageRect, colorSpace, { WTF::move(filter) });
     }
 
     if (!m_targetSwitcher)
@@ -245,7 +273,16 @@ void RenderLayerFilters::applyFilterEffect(GraphicsContext& destinationContext)
     LOG_WITH_STREAM(Filters, stream << "\nRenderLayerFilters " << this << " applyFilterEffect");
 
     ASSERT(m_targetSwitcher);
-    m_targetSwitcher->endClipAndDrawSourceImage(destinationContext, DestinationColorSpace::SRGB());
+
+    auto colorSpace = DestinationColorSpace::SRGB();
+#if !USE(CAIRO)
+    if (CheckedPtr layer = m_layer.get()) {
+        if (layer->renderer().isSVGLayerAwareRenderer())
+            colorSpace = DestinationColorSpace::LinearSRGB();
+    }
+#endif
+
+    m_targetSwitcher->endClipAndDrawSourceImage(destinationContext, colorSpace);
 
     LOG_WITH_STREAM(Filters, stream << "RenderLayerFilters " << this << " applyFilterEffect done\n");
 }

@@ -802,7 +802,7 @@ PositionWithAffinity RenderSVGText::positionForPoint(const LayoutPoint& pointInC
 bool RenderSVGText::requiresLayer() const
 {
     if (document().settings().layerBasedSVGEngineEnabled())
-        return true;
+        return RenderSVGBlock::requiresLayer();
     return false;
 }
 

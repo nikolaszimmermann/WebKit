@@ -71,6 +71,11 @@ RenderSVGModelObject::RenderSVGModelObject(Type type, SVGElement& element, Rende
 
 RenderSVGModelObject::~RenderSVGModelObject() = default;
 
+bool RenderSVGModelObject::requiresLayer() const
+{
+    return createsGroup() || hasTransformRelatedProperty() || hasHiddenBackface() || hasReflection() || !style().specifiedZIndex().isAuto() || style().isolation() != Isolation::Auto;
+}
+
 void RenderSVGModelObject::updateFromStyle()
 {
     RenderLayerModelObject::updateFromStyle();
@@ -284,8 +289,9 @@ bool RenderSVGModelObject::checkEnclosure(RenderElement* renderer, const FloatRe
 LayoutSize RenderSVGModelObject::cachedSizeForOverflowClip() const
 {
     ASSERT(hasNonVisibleOverflow());
-    ASSERT(hasLayer());
-    return layer()->size();
+    if (hasLayer())
+        return layer()->size();
+    return currentSVGLayoutRect().size();
 }
 
 bool RenderSVGModelObject::applyCachedClipAndScrollPosition(RepaintRects& rects, const RenderLayerModelObject* container, VisibleRectContext context) const
@@ -311,12 +317,15 @@ bool RenderSVGModelObject::applyCachedClipAndScrollPosition(RepaintRects& rects,
 
 Path RenderSVGModelObject::computeClipPath(AffineTransform& transform) const
 {
-    if (layer()->isTransformed())
+    if (hasLayer() && layer()->isTransformed())
         transform.multiply(layer()->currentTransform(Style::TransformResolver::individualTransformOperations).toAffineTransform());
 
     if (RefPtr useElement = dynamicDowncast<SVGUseElement>(protect(element()))) {
-        if (CheckedPtr clipChildRenderer = useElement->rendererClipChild())
-            transform.multiply(protect(downcast<RenderLayerModelObject>(*clipChildRenderer).layer())->currentTransform(Style::TransformResolver::individualTransformOperations).toAffineTransform());
+        if (CheckedPtr clipChildRenderer = useElement->rendererClipChild()) {
+            auto& layerModelObject = downcast<RenderLayerModelObject>(*clipChildRenderer);
+            if (layerModelObject.hasLayer() && protect(layerModelObject.layer())->isTransformed())
+                transform.multiply(protect(layerModelObject.layer())->currentTransform(Style::TransformResolver::individualTransformOperations).toAffineTransform());
+        }
         if (RefPtr clipChild = useElement->clipChild())
             return pathFromGraphicsElement(*clipChild);
     }

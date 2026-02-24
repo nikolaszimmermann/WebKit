@@ -95,7 +95,6 @@ void RenderSVGResourceClipper::applyPathClipping(GraphicsContext& context, const
 
     auto* clipRendererPtr = graphicsElement.renderer();
     ASSERT(clipRendererPtr);
-    ASSERT(clipRendererPtr->hasLayer());
     auto& clipRenderer = downcast<RenderSVGModelObject>(*clipRendererPtr);
 
     AffineTransform clipPathTransform;
@@ -206,9 +205,32 @@ bool RenderSVGResourceClipper::hitTestClipContent(const FloatRect& objectBoundin
         point = LayoutPoint(applyTransform.inverse().value_or(AffineTransform()).mapPoint(point));
     }
 
-    HitTestResult result(toLayoutPoint(point - flooredLayoutPoint(this->objectBoundingBox().minXMinYCorner())));
+    // Iterate children directly instead of using the clipper's layer()->hitTest(),
+    // because RenderSVGHiddenContainer::nodeAtPoint() always returns false,
+    // preventing the layer hit test from reaching any child shapes inside <clipPath>.
     constexpr OptionSet<HitTestRequest::Type> hitType { HitTestRequest::Type::SVGClipContent, HitTestRequest::Type::DisallowUserAgentShadowContent };
-    return layer()->hitTest(hitType, result);
+    HitTestLocation hitTestLocation(point);
+    for (CheckedPtr child = lastChild(); child; child = child->previousSibling()) {
+        auto* svgChild = dynamicDowncast<RenderSVGModelObject>(*child);
+        if (!svgChild)
+            continue;
+
+        HitTestResult result(point);
+        if (svgChild->hasLayer()) {
+            // Child has its own layer (e.g., due to CSS transform). Use the child
+            // layer's hit test so the inverse transform is applied to the point.
+            if (svgChild->layer()->hitTest(hitType, result))
+                return true;
+        } else {
+            // Compute the accumulatedOffset that nodeAtPoint() expects, so that
+            // coordinateSystemOriginTranslation (= nominalSVGLayoutLocation - adjustedLocation)
+            // cancels out to zero and localPoint stays in SVG user space coordinates.
+            auto accumulatedOffset = toLayoutPoint(toLayoutSize(svgChild->nominalSVGLayoutLocation()) - toLayoutSize(svgChild->currentSVGLayoutLocation()));
+            if (child->nodeAtPoint(hitType, result, hitTestLocation, accumulatedOffset, HitTestForeground))
+                return true;
+        }
+    }
+    return false;
 }
 
 FloatRect RenderSVGResourceClipper::resourceBoundingBox(const RenderObject& object, RepaintRectCalculation repaintRectCalculation)

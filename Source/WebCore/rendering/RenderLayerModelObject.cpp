@@ -457,6 +457,28 @@ void RenderLayerModelObject::updateHasSVGTransformFlags()
     bool hasSVGTransform = needsHasSVGTransformFlags();
     setHasTransformRelatedProperty(hasSVGTransform || style().hasTransformRelatedProperty());
     setHasSVGTransform(hasSVGTransform);
+
+    // Ensure layer existence matches requiresLayer() when SVG transform flags change dynamically
+    // (e.g., animateMotion adding a supplemental transform after initial render).
+    if (requiresLayer()) {
+        if (!layer() && layerCreationAllowedForSubtree()) {
+            createLayer();
+            if (parent() && !needsLayout())
+                layer()->setRepaintStatus(RepaintStatus::NeedsFullRepaint);
+
+            // The newly created layer starts at (0,0). Set the correct position from the
+            // renderer so that offsetFromAncestor() returns valid results in
+            // paintLayerByApplyingTransform() before the next updateLayerPositions() pass.
+            if (auto* svgModelObject = dynamicDowncast<RenderSVGModelObject>(this)) {
+                auto layerLocation = svgModelObject->currentSVGLayoutLocation();
+                for (auto* ancestor = parent(); ancestor && !ancestor->hasLayer(); ancestor = ancestor->parent()) {
+                    if (auto* svgAncestor = dynamicDowncast<RenderSVGModelObject>(ancestor))
+                        layerLocation.moveBy(svgAncestor->currentSVGLayoutLocation());
+                }
+                layer()->setLocation(layerLocation);
+            }
+        }
+    }
 }
 
 RenderSVGResourceClipper* RenderLayerModelObject::svgClipperResourceFromStyle() const
@@ -675,6 +697,9 @@ void RenderLayerModelObject::repaintOrRelayoutAfterSVGTransformChange()
 
     updateHasSVGTransformFlags();
 
+    // Capture old-position repaint rect synchronously before updating the transform.
+    repaint();
+
     // LBSE shares the text rendering code with the legacy SVG engine, largely unmodified.
     // At present text layout depends on transformations ('screen font scaling factor' is used to
     // determine which font to use for layout / painting). Therefore if the x/y scaling factors
@@ -698,6 +723,11 @@ void RenderLayerModelObject::repaintOrRelayoutAfterSVGTransformChange()
             layer()->forceStackingContextIfNeeded();
     }
 
+    // Refresh cached repaint rects to post-transform state, preventing
+    // recursiveUpdateLayerPositions() from re-generating old-position rects.
+    if (hasLayer())
+        layer()->computeRepaintRectsIncludingDescendants();
+
     auto determineIfLayerTransformChangeModifiesScale = [&]() -> bool {
         if (previousTransform == currentTransform)
             return false;
@@ -716,6 +746,7 @@ void RenderLayerModelObject::repaintOrRelayoutAfterSVGTransformChange()
     if (determineIfLayerTransformChangeModifiesScale) {
         if (auto* textAffectedByTransformChange = dynamicDowncast<RenderSVGText>(this)) {
             // Mark text metrics for update, and only trigger a relayout and not an explicit repaint.
+            // The relayout + recursiveUpdateLayerPositions() will generate the new-position repaint rect.
             textAffectedByTransformChange->setNeedsTextMetricsUpdate();
             textAffectedByTransformChange->textElement().updateSVGRendererForElementChange();
             return;
@@ -730,14 +761,15 @@ void RenderLayerModelObject::repaintOrRelayoutAfterSVGTransformChange()
                 markedAny = true;
         }
 
-        // If we marked a text descendant for relayout, we are expecting a relayout ourselves, so no reason for an explicit repaint().
+        // If we marked a text descendant for relayout, the relayout + recursiveUpdateLayerPositions()
+        // will generate the new-position repaint rect.
         if (markedAny)
             return;
     }
 
-    // Instead of performing a full-fledged layout (issuing repaints), just recompute the layer transform, and repaint.
-    // In LBSE transformations do not affect the layout (except for text, where it still does!) -- SVG follows closely the CSS/HTML route, to avoid costly layouts.
-    repaintRendererOrClientsOfReferencedSVGResources();
+    // Non-text case: synchronously repaint the new position and handle SVG resource clients.
+    repaint();
+    repaintClientsOfReferencedSVGResources();
 }
 
 void RenderLayerModelObject::paintSVGClippingMask(PaintInfo& paintInfo, const FloatRect& objectBoundingBox) const

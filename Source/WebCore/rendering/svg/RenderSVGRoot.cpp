@@ -371,10 +371,15 @@ void RenderSVGRoot::paintContents(PaintInfo& paintInfo, const LayoutPoint& paint
     else if (paintInfo.phase == PaintPhase::ChildBlockBackgrounds)
         paintInfoForChild.phase = PaintPhase::ChildBlockBackground;
 
-    paintInfoForChild.updateSubtreePaintRootForChildren(this);
-    for (auto& child : childrenOfType<RenderElement>(*this)) {
-        if (!child.hasSelfPaintingLayer())
-            child.paint(paintInfoForChild, paintOffset);
+    // When the SVG root has a self-painting layer, children are painted by
+    // paintSVGChildrenInDOMOrder() to ensure correct DOM-order interleaving
+    // of layer and non-layer children.
+    if (!hasSelfPaintingLayer()) {
+        paintInfoForChild.updateSubtreePaintRootForChildren(this);
+        for (auto& child : childrenOfType<RenderElement>(*this)) {
+            if (!child.hasSelfPaintingLayer())
+                child.paint(paintInfoForChild, paintOffset);
+        }
     }
 }
 
@@ -455,7 +460,9 @@ bool RenderSVGRoot::nodeAtPoint(const HitTestRequest& request, HitTestResult& re
     visualOverflowRect.moveBy(adjustedLocation);
 
     // Test SVG content if the point is in our content box or it is inside the visualOverflowRect and the overflow is visible.
-    if (contentBoxRect().contains(adjustedLocation) || (!shouldApplyViewportClip() && locationInContainer.intersects(visualOverflowRect))) {
+    auto adjustedContentBoxRect = contentBoxRect();
+    adjustedContentBoxRect.moveBy(adjustedLocation);
+    if (locationInContainer.intersects(adjustedContentBoxRect) || (!shouldApplyViewportClip() && locationInContainer.intersects(visualOverflowRect))) {
         // Check kids first.
         for (auto* child = lastChild(); child; child = child->previousSibling()) {
             if (!child->hasLayer() && child->nodeAtPoint(request, result, locationInContainer, adjustedLocation, hitTestAction)) {

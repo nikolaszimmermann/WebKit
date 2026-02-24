@@ -101,6 +101,7 @@
 #include "ReferencedSVGResources.h"
 #include "RenderAncestorIterator.h"
 #include "RenderBoxInlines.h"
+#include "RenderDescendantIterator.h"
 #include "RenderElementInlines.h"
 #include "RenderFlexibleBox.h"
 #include "RenderFragmentContainer.h"
@@ -606,7 +607,8 @@ static bool canCreateStackingContext(const RenderLayer& layer)
         || renderer.shouldApplyPaintContainment()
         || !renderer.style().usedZIndex().isAuto()
         || renderer.style().willChange().canCreateStackingContext()
-        || layer.establishesTopLayer();
+        || layer.establishesTopLayer()
+        || (renderer.isSVGLayerAwareRenderer() && renderer.document().settings().layerBasedSVGEngineEnabled());
 }
 
 bool RenderLayer::shouldBeNormalFlowOnly() const
@@ -1937,7 +1939,7 @@ void RenderLayer::updateAncestorDependentState()
 {
     m_enclosingSVGHiddenOrResourceContainer = nullptr;
     auto determineSVGAncestors = [&] (const RenderElement& renderer) {
-        for (auto* ancestor = renderer.parent(); ancestor; ancestor = ancestor->parent()) {
+        for (auto* ancestor = &renderer; ancestor; ancestor = ancestor->parent()) {
             if (auto* container = dynamicDowncast<RenderSVGHiddenContainer>(ancestor)) {
                 m_enclosingSVGHiddenOrResourceContainer = container;
                 return;
@@ -2020,8 +2022,10 @@ void RenderLayer::updateDescendantDependentFlags()
 
 bool RenderLayer::computeHasVisibleContent() const
 {
+    // LBSE: The anonymous RenderSVGViewportContainer wrapping all SVG content, is always considered
+    // visible - we always want to visit children of that renderer.
     if (renderer().isAnonymous() && is<RenderSVGViewportContainer>(renderer()))
-        return false;
+        return true;
 
     if (m_isHiddenByOverflowTruncation)
         return false;
@@ -2150,7 +2154,8 @@ bool RenderLayer::updateLayerPosition(OptionSet<UpdateLayerPositionsFlag>* flags
                 // Omit them when computing our xpos/ypos.
                 if (!is<RenderTableRow>(boxRenderer))
                     localPoint += boxRenderer->topLeftLocationOffset();
-            }
+            } else if (auto* svgModelObject = dynamicDowncast<RenderSVGModelObject>(ancestor))
+                localPoint += svgModelObject->locationOffsetEquivalent();
             ancestor = ancestor->parent();
         }
         if (auto* tableRow = dynamicDowncast<RenderTableRow>(ancestor)) {
@@ -3298,11 +3303,26 @@ void RenderLayer::paintSVGResourceLayer(GraphicsContext& context, const AffineTr
 
     auto* rootPaintingLayer = [&] () {
         auto* curr = parent();
-        while (curr && !(curr->renderer().isAnonymous() && is<RenderSVGViewportContainer>(curr->renderer())))
+        while (curr) {
+            auto& currRenderer = curr->renderer();
+            if (currRenderer.isAnonymous() && is<RenderSVGViewportContainer>(currRenderer))
+                return curr;
+            if (currRenderer.isRenderSVGRoot())
+                return curr;
             curr = curr->parent();
+        }
         return curr;
     }();
     ASSERT(rootPaintingLayer);
+
+    // If the viewport container has no layer, the walk ends at the SVG root.
+    // Compensate for the content box offset (border + padding) so that resource
+    // content paints at (0,0) in the ImageBuffer rather than at (borderLeft, borderTop).
+    if (auto* svgRoot = dynamicDowncast<RenderSVGRoot>(rootPaintingLayer->renderer())) {
+        auto contentOffset = svgRoot->contentBoxLocation();
+        if (!contentOffset.isZero())
+            context.translate(-FloatPoint(contentOffset));
+    }
 
     LayerPaintingInfo paintingInfo(rootPaintingLayer, localPaintDirtyRect, PaintBehavior::Normal, LayoutSize());
 
@@ -3895,6 +3915,16 @@ void RenderLayer::paintLayerContents(GraphicsContext& context, const LayerPainti
 
         LayerPaintingInfo localPaintingInfo(paintingInfo);
         GraphicsContext* filterContext = setupFilters(context, localPaintingInfo, localPaintFlags, columnAwareOffsetFromRoot, backgroundRect);
+
+        bool isLayerForSVGRenderer = renderer().isSVGLayerAwareRenderer() && renderer().document().settings().layerBasedSVGEngineEnabled();
+
+        // Per the SVG spec, if a filter is referenced but cannot be applied (non-existent
+        // reference, empty filter, etc.), the element must not be rendered — the filter
+        // produces transparent black, making the element invisible. The CSS Filter Effects
+        // spec differs — a failed filter means "no effect" (painted normally). Therefore
+        // treat SVG renderers differently, obeying to the SVG rules.
+        bool hasFailedFilter = isLayerForSVGRenderer && !filterContext && shouldHaveFiltersForPainting(context, localPaintFlags, localPaintingInfo.paintBehavior);
+
         GraphicsContext& currentContext = filterContext ? *filterContext : context;
 
         if (filterContext)
@@ -3929,11 +3959,23 @@ void RenderLayer::paintLayerContents(GraphicsContext& context, const LayerPainti
             }
         }
 
-        // Now walk the sorted list of children with negative z-indices.
-        if (shouldPaintNegativeZIndexChildren)
+        bool isSVGForeignObject = isLayerForSVGRenderer && renderer().isRenderSVGForeignObject();
+
+        // Check if we have a foreground layer for SVG DOM order splitting.
+        // This is used when composited children (e.g. inside foreignObject) would
+        // otherwise paint on top of later SVG siblings, violating DOM paint order.
+        bool hasSVGForegroundSplit = isLayerForSVGRenderer && !isSVGForeignObject && backing() && backing()->foregroundLayer() && !negativeZOrderLayers().size();
+
+        // Negative z-order children: paint for HTML layers and foreignObject.
+        // Non-foreignObject SVG layers handle z-ordering in paintSVGChildrenInDOMOrder.
+        if (shouldPaintNegativeZIndexChildren && (!isLayerForSVGRenderer || isSVGForeignObject))
             paintList(negativeZOrderLayers(), currentContext, paintingInfo, localPaintFlags);
-        
-        if (isPaintingCompositedForeground && shouldPaintContent)
+
+        // When we have an SVG foreground split, paint children before the first composited child during the background phase (into the primary layer).
+        if (hasSVGForegroundSplit && isPaintingCompositedBackground && shouldPaintContent)
+            paintSVGChildrenInDOMOrder(currentContext, localPaintingInfo, localPaintFlags, layerFragments, paintBehavior, subtreePaintRootForRenderer, SVGChildPaintScope::BeforeFirstCompositedChild);
+
+        if (isPaintingCompositedForeground && shouldPaintContent && !hasFailedFilter)
             paintForegroundForFragments(layerFragments, currentContext, context, paintingInfo.paintDirtyRect, haveTransparency, localPaintingInfo, paintBehavior, subtreePaintRootForRenderer);
 
         if (isCollectingEventRegion && !isInsideSkippedSubtree)
@@ -3942,15 +3984,22 @@ void RenderLayer::paintLayerContents(GraphicsContext& context, const LayerPainti
         if (isCollectingAccessibilityRegion)
             collectAccessibilityRegionsForFragments(layerFragments, currentContext, localPaintingInfo, paintBehavior);
 
-        if (shouldPaintOutline)
+        if (shouldPaintOutline && !hasFailedFilter)
             paintOutlineForFragments(layerFragments, currentContext, localPaintingInfo, paintBehavior, subtreePaintRootForRenderer);
 
-        if (isPaintingCompositedForeground) {
-            // Paint any child layers that have overflow.
-            paintList(normalFlowLayers(), currentContext, paintingInfo, localPaintFlags);
-
-            // Now walk the sorted list of children with positive z-indices.
-            paintList(positiveZOrderLayers(), currentContext, localPaintingInfo, localPaintFlags);
+        // Child layer painting: SVG uses DOM-order interleaving, HTML uses z-order lists.
+        if (isPaintingCompositedForeground && !hasFailedFilter) {
+            if (isLayerForSVGRenderer && !isSVGForeignObject) {
+                if (hasSVGForegroundSplit) {
+                    // Paint non-composited children from the first composited child onwards into the foreground layer.
+                    paintSVGChildrenInDOMOrder(currentContext, localPaintingInfo, localPaintFlags, layerFragments, paintBehavior, subtreePaintRootForRenderer, SVGChildPaintScope::FromFirstCompositedChild);
+                } else
+                    paintSVGChildrenInDOMOrder(currentContext, localPaintingInfo, localPaintFlags, layerFragments, paintBehavior, subtreePaintRootForRenderer);
+            } else {
+                // HTML layers and foreignObject use normal z-order list painting.
+                paintList(normalFlowLayers(), currentContext, paintingInfo, localPaintFlags);
+                paintList(positiveZOrderLayers(), currentContext, localPaintingInfo, localPaintFlags);
+            }
         }
 
         if (m_scrollableArea) {
@@ -4016,6 +4065,7 @@ void RenderLayer::paintLayerByApplyingTransform(GraphicsContext& context, const 
     // all we need to do is add the delta to the accumulated pixels coming from ancestor layers.
     // Translate the graphics context to the snapping position to avoid off-device-pixel positing.
     transform.translateRight(alignedOffsetForThisLayer.width(), alignedOffsetForThisLayer.height());
+
     // Apply the transform.
     auto oldTransform = context.getCTM();
     auto affineTransform = transform.toAffineTransform();
@@ -4046,6 +4096,220 @@ void RenderLayer::paintLayerByApplyingTransform(GraphicsContext& context, const 
         paintingInfo.regionContext->popTransform();
 
     context.setCTM(oldTransform);
+}
+
+Vector<RenderLayer::SVGPaintOrderAwareChild> RenderLayer::collectSVGChildrenInDOMOrder(HashSet<const RenderElement*>* splitContainers) const
+{
+    // FIXME: Optimize this.
+
+    // Recursively collect children, splitting non-layered containers that have
+    // layered descendants to ensure proper DOM-order interleaving.
+    Vector<SVGPaintOrderAwareChild> allChildren;
+
+    auto collectChildren = [&allChildren, splitContainers](auto& self, RenderElement& parent) -> void {
+        for (auto& child : childrenOfType<RenderElement>(parent)) {
+            // Never directly paint children of <defs>, <linearGradient>, etc.
+            // Their content is only rendered via resource layers or <use> references.
+            if (child.isRenderSVGHiddenContainer())
+                continue;
+
+            if (child.hasSelfPaintingLayer()) {
+                auto* childLayer = downcast<RenderLayerModelObject>(child).layer();
+                allChildren.append({ &child, childLayer, childLayer->zIndex() });
+                continue;
+            }
+
+            // Check if this non-layered subtree contains any layered descendants.
+            bool containsLayeredDescendant = false;
+            for (auto& descendant : descendantsOfType<RenderElement>(child)) {
+                if (descendant.hasSelfPaintingLayer()) {
+                    containsLayeredDescendant = true;
+                    break;
+                }
+            }
+
+            if (containsLayeredDescendant) {
+                if (splitContainers)
+                    splitContainers->add(&child);
+                self(self, child); // Recurse to interleave children with layers
+            } else
+                allChildren.append({ &child, nullptr, 0 }); // Paint atomically
+        }
+    };
+    collectChildren(collectChildren, renderer());
+
+    // Sort by z-index; for equal z-index, maintain DOM order.
+    std::stable_sort(allChildren.begin(), allChildren.end(),
+        [](const SVGPaintOrderAwareChild& a, const SVGPaintOrderAwareChild& b) {
+            if (a.zIndex != b.zIndex)
+                return a.zIndex < b.zIndex;
+            auto* elementA = a.renderer->element();
+            auto* elementB = b.renderer->element();
+            if (elementA && elementB)
+                return !!(elementA->compareDocumentPosition(*elementB) & Node::DOCUMENT_POSITION_FOLLOWING);
+            return false;
+        });
+
+    return allChildren;
+}
+
+void RenderLayer::paintSVGChildrenInDOMOrder(GraphicsContext& context, const LayerPaintingInfo& paintingInfo, OptionSet<PaintLayerFlag> paintFlags,
+    const LayerFragments& layerFragments, OptionSet<PaintBehavior> paintBehavior, RenderObject* subtreePaintRootForRenderer, SVGChildPaintScope paintScope)
+{
+    // SVG requires all children to paint in DOM document order, interleaving
+    // both layer and non-layer children. z-index can override the order.
+    // Non-layer children are treated as having z-index: 0 (auto).
+
+    HashSet<const RenderElement*> splitContainers;
+    auto allChildren = collectSVGChildrenInDOMOrder(&splitContainers);
+    if (allChildren.isEmpty())
+        return;
+
+    // Helper to compute the paint offset for a non-layer child within a fragment.
+    auto computeChildPaintOffset = [&](const SVGPaintOrderAwareChild& childToPaint, const LayerFragment& fragment) -> LayoutPoint {
+        auto containerPaintOffset = paintOffsetForRenderer(fragment, paintingInfo);
+        LayoutPoint childPaintOffset;
+
+        if (auto* svgModelObject = dynamicDowncast<RenderSVGModelObject>(renderer()))
+            childPaintOffset = containerPaintOffset + svgModelObject->currentSVGLayoutLocation();
+        else if (auto* svgRoot = dynamicDowncast<RenderSVGRoot>(renderer())) {
+            childPaintOffset = containerPaintOffset + svgRoot->location();
+            childPaintOffset.moveBy(LayoutPoint(-svgRoot->scrollPosition()));
+        } else
+            childPaintOffset = containerPaintOffset;
+
+        // Accumulate offsets from non-layered ancestors between the child and the layer's renderer.
+        for (auto* ancestor = childToPaint.renderer->parent(); ancestor && ancestor != &renderer(); ancestor = ancestor->parent()) {
+            if (auto* svgModel = dynamicDowncast<RenderSVGModelObject>(ancestor))
+                childPaintOffset.moveBy(svgModel->currentSVGLayoutLocation());
+        }
+
+        return childPaintOffset;
+    };
+
+    // When using SVGChildPaintScope, determine the range of children to paint.
+    // Composited children always paint into their own backing and are skipped here.
+    size_t paintStart = 0;
+    size_t paintEnd = allChildren.size();
+
+    if (paintScope != SVGChildPaintScope::All) {
+        // Find the index of the first composited child.
+        size_t firstComposited = allChildren.size();
+        for (size_t i = 0; i < allChildren.size(); ++i) {
+            if (allChildren[i].layer && allChildren[i].layer->isComposited()) {
+                firstComposited = i;
+                break;
+            }
+        }
+
+        if (paintScope == SVGChildPaintScope::BeforeFirstCompositedChild) {
+            // Paint non-composited children before the first composited child.
+            paintEnd = firstComposited;
+        } else {
+            ASSERT(paintScope == SVGChildPaintScope::FromFirstCompositedChild);
+            // Paint non-composited children from the first composited child onwards.
+            paintStart = firstComposited;
+        }
+    }
+
+    // First pass: paint foreground + outline for each child atomically.
+    // Each child's outline is painted right after its foreground, before
+    // moving to the next sibling, preserving the SVG painting model where
+    // later DOM siblings paint on top of earlier siblings' outlines.
+    for (size_t i = paintStart; i < paintEnd; ++i) {
+        auto& childToPaint = allChildren[i];
+        if (childToPaint.layer) {
+            if (paintScope != SVGChildPaintScope::All && childToPaint.layer->isComposited())
+                continue; // Composited children paint into their own backing.
+            childToPaint.layer->paintLayer(context, paintingInfo, paintFlags);
+            continue;
+        }
+
+        // Paint non-layer child foreground using the parent's fragment info.
+        for (const auto& fragment : layerFragments) {
+            if (!fragment.shouldPaintContent || fragment.dirtyForegroundRect().isEmpty())
+                continue;
+
+            GraphicsContextStateSaver stateSaver(context, false);
+            RegionContextStateSaver regionContextStateSaver(paintingInfo.regionContext);
+            clipToRect(context, stateSaver, regionContextStateSaver, paintingInfo, paintBehavior, fragment.dirtyForegroundRect());
+
+            PaintInfo paintInfo(context, fragment.dirtyForegroundRect().rect(),
+                PaintPhase::Foreground, paintBehavior, subtreePaintRootForRenderer,
+                nullptr, nullptr, &paintingInfo.rootLayer->renderer(), this,
+                paintingInfo.requireSecurityOriginAccessForWidgets);
+            paintInfo.overlapTestRequests = paintingInfo.overlapTestRequests;
+            paintInfo.updateSubtreePaintRootForChildren(&renderer());
+
+            childToPaint.renderer->paint(paintInfo, computeChildPaintOffset(childToPaint, fragment));
+        }
+
+        // Paint outline for this child immediately after its foreground,
+        // making the element's visual output atomic.
+        for (const auto& fragment : layerFragments) {
+            if (!fragment.shouldPaintContent || fragment.dirtyForegroundRect().isEmpty())
+                continue;
+
+            GraphicsContextStateSaver stateSaver(context, false);
+            RegionContextStateSaver regionContextStateSaver(paintingInfo.regionContext);
+            clipToRect(context, stateSaver, regionContextStateSaver, paintingInfo, paintBehavior, fragment.dirtyForegroundRect());
+
+            PaintInfo outlinePaintInfo(context, fragment.dirtyForegroundRect().rect(),
+                PaintPhase::Outline, paintBehavior, subtreePaintRootForRenderer,
+                nullptr, nullptr, &paintingInfo.rootLayer->renderer(), this,
+                paintingInfo.requireSecurityOriginAccessForWidgets);
+            outlinePaintInfo.updateSubtreePaintRootForChildren(&renderer());
+
+            childToPaint.renderer->paint(outlinePaintInfo, computeChildPaintOffset(childToPaint, fragment));
+        }
+    }
+
+    // Second pass: paint self-outlines for split containers only.
+    // collectChildren splits non-layered containers that have layered descendants,
+    // omitting the container itself from allChildren. Those containers' children
+    // already had their outlines painted in the first pass, but the container itself
+    // still needs its own outline. Use PaintPhase::SelfOutline to avoid double-painting
+    // children's outlines.
+    if (!splitContainers.isEmpty()) {
+        for (const auto& fragment : layerFragments) {
+            if (!fragment.shouldPaintContent || fragment.dirtyForegroundRect().isEmpty())
+                continue;
+
+            GraphicsContextStateSaver stateSaver(context, false);
+            RegionContextStateSaver regionContextStateSaver(paintingInfo.regionContext);
+            clipToRect(context, stateSaver, regionContextStateSaver, paintingInfo, paintBehavior, fragment.dirtyForegroundRect());
+
+            PaintInfo paintInfo(context, fragment.dirtyForegroundRect().rect(),
+                PaintPhase::SelfOutline, paintBehavior, subtreePaintRootForRenderer,
+                nullptr, nullptr, &paintingInfo.rootLayer->renderer(), this,
+                paintingInfo.requireSecurityOriginAccessForWidgets);
+            paintInfo.updateSubtreePaintRootForChildren(&renderer());
+
+            auto containerPaintOffset = paintOffsetForRenderer(fragment, paintingInfo);
+            LayoutPoint basePaintOffset;
+            if (auto* svgModelObject = dynamicDowncast<RenderSVGModelObject>(renderer()))
+                basePaintOffset = containerPaintOffset + svgModelObject->currentSVGLayoutLocation();
+            else if (auto* svgRoot = dynamicDowncast<RenderSVGRoot>(renderer())) {
+                basePaintOffset = containerPaintOffset + svgRoot->location();
+                basePaintOffset.moveBy(LayoutPoint(-svgRoot->scrollPosition()));
+            } else
+                basePaintOffset = containerPaintOffset;
+
+            auto paintSplitContainerOutlines = [&](auto& self, RenderElement& parent, const LayoutPoint& paintOffset) -> void {
+                for (auto& child : childrenOfType<RenderElement>(parent)) {
+                    if (child.hasSelfPaintingLayer() || !splitContainers.contains(&child))
+                        continue;
+                    child.paint(paintInfo, paintOffset);
+                    // Recurse to reach nested split containers.
+                    auto childOffset = paintOffset;
+                    if (auto* svgModel = dynamicDowncast<RenderSVGModelObject>(child))
+                        childOffset.moveBy(svgModel->currentSVGLayoutLocation());
+                    self(self, child, childOffset);
+                }
+            };
+            paintSplitContainerOutlines(paintSplitContainerOutlines, renderer(), basePaintOffset);
+        }
+    }
 }
 
 void RenderLayer::paintList(LayerList layerIterator, GraphicsContext& context, const LayerPaintingInfo& paintingInfo, OptionSet<PaintLayerFlag> paintFlags)
@@ -4826,33 +5090,48 @@ RenderLayer::HitLayer RenderLayer::hitTestLayer(RenderLayer* rootLayer, RenderLa
     if (auto* rendererBox = this->renderBox(); rendererBox && !rendererBox->hitTestClipPath(hitTestLocation, toLayoutPoint(offsetFromRoot - toLayoutSize(rendererLocation()))))
         return { };
 
-    // Begin by walking our list of positive layers from highest z-index down to the lowest z-index.
-    auto hitLayer = hitTestList(positiveZOrderLayers(), rootLayer, request, result, hitTestRect, hitTestLocation, localTransformState.get(), zOffsetForDescendantsPtr, depthSortDescendants);
-    if (hitLayer.layer) {
-        if (!depthSortDescendants)
+    bool useSVGDOMOrderHitTest = renderer().isSVGLayerAwareRenderer()
+        && !renderer().isRenderSVGRoot()
+        && !renderer().isRenderSVGForeignObject()
+        && transform()
+        && renderer().document().settings().layerBasedSVGEngineEnabled();
+
+    if (useSVGDOMOrderHitTest) {
+        // SVG hit tests children in DOM order, interleaving layer and non-layer children.
+        // This is only used when a transform was applied (coordinates are layer-local).
+        auto hitLayer = hitTestSVGChildrenInDOMOrder(rootLayer, request, result,
+            hitTestRect, hitTestLocation, localTransformState.get(), zOffsetForDescendantsPtr);
+        if (hitLayer.layer)
             return hitLayer;
-        if (hitLayer.zOffset > candidateLayer.zOffset)
-            candidateLayer = hitLayer;
-    }
-
-    // Now check our overflow objects.
-    {
-        HitTestResult tempResult(result.hitTestLocation());
-        hitLayer = hitTestList(normalFlowLayers(), rootLayer, request, tempResult, hitTestRect, hitTestLocation, localTransformState.get(), zOffsetForDescendantsPtr, depthSortDescendants);
-
-        if (request.resultIsElementList())
-            result.append(tempResult, request);
-
+    } else {
+        // Begin by walking our list of positive layers from highest z-index down to the lowest z-index.
+        auto hitLayer = hitTestList(positiveZOrderLayers(), rootLayer, request, result, hitTestRect, hitTestLocation, localTransformState.get(), zOffsetForDescendantsPtr, depthSortDescendants);
         if (hitLayer.layer) {
-            if (!depthSortDescendants || hitLayer.zOffset > candidateLayer.zOffset) {
-                if (!request.resultIsElementList())
-                    result = tempResult;
-
-                candidateLayer = hitLayer;
-            }
-
             if (!depthSortDescendants)
                 return hitLayer;
+            if (hitLayer.zOffset > candidateLayer.zOffset)
+                candidateLayer = hitLayer;
+        }
+
+        // Now check our overflow objects.
+        {
+            HitTestResult tempResult(result.hitTestLocation());
+            hitLayer = hitTestList(normalFlowLayers(), rootLayer, request, tempResult, hitTestRect, hitTestLocation, localTransformState.get(), zOffsetForDescendantsPtr, depthSortDescendants);
+
+            if (request.resultIsElementList())
+                result.append(tempResult, request);
+
+            if (hitLayer.layer) {
+                if (!depthSortDescendants || hitLayer.zOffset > candidateLayer.zOffset) {
+                    if (!request.resultIsElementList())
+                        result = tempResult;
+
+                    candidateLayer = hitLayer;
+                }
+
+                if (!depthSortDescendants)
+                    return hitLayer;
+            }
         }
     }
 
@@ -4891,10 +5170,11 @@ RenderLayer::HitLayer RenderLayer::hitTestLayer(RenderLayer* rootLayer, RenderLa
             result.append(tempResult, request);
     }
 
-    // Now check our negative z-index children.
-    {
+    if (!useSVGDOMOrderHitTest) {
+        // Now check our negative z-index children.
+        // (For SVG DOM-order hit testing, negativeZ children were already handled by hitTestSVGChildrenInDOMOrder.)
         HitTestResult tempResult(result.hitTestLocation());
-        hitLayer = hitTestList(negativeZOrderLayers(), rootLayer, request, tempResult, hitTestRect, hitTestLocation, localTransformState.get(), zOffsetForDescendantsPtr, depthSortDescendants);
+        auto hitLayer = hitTestList(negativeZOrderLayers(), rootLayer, request, tempResult, hitTestRect, hitTestLocation, localTransformState.get(), zOffsetForDescendantsPtr, depthSortDescendants);
 
         if (request.resultIsElementList())
             result.append(tempResult, request);
@@ -5031,7 +5311,18 @@ bool RenderLayer::hitTestContents(const HitTestRequest& request, HitTestResult& 
 {
     ASSERT(isSelfPaintingLayer() || hasSelfPaintingLayerDescendant());
 
-    if (!renderer().hitTest(request, result, hitTestLocation, toLayoutPoint(layerBounds.location() - rendererLocation()), hitTestFilter)) {
+    if (auto* svgModelObject = dynamicDowncast<RenderSVGModelObject>(renderer()); svgModelObject && transform()) {
+        // When a transform was applied by hitTestLayerByApplyingTransform(), the hit test
+        // coordinates are layer-local (origin at the layer's position). Convert back to SVG
+        // absolute coordinates so that fragment/shape comparisons in nodeAtPoint() work.
+        auto svgOffset = svgModelObject->nominalSVGLayoutLocation();
+        HitTestLocation svgLocation(hitTestLocation, toLayoutSize(svgOffset));
+        auto accumulatedOffset = toLayoutPoint(toLayoutSize(svgOffset) - toLayoutSize(svgModelObject->currentSVGLayoutLocation()));
+        if (!renderer().hitTest(request, result, svgLocation, accumulatedOffset, hitTestFilter)) {
+            ASSERT(!result.innerNode() || (request.resultIsElementList() && result.listBasedTestResult().size()));
+            return false;
+        }
+    } else if (!renderer().hitTest(request, result, hitTestLocation, toLayoutPoint(layerBounds.location() - rendererLocation()), hitTestFilter)) {
         // It's wrong to set innerNode, but then claim that you didn't hit anything, unless it is
         // a rect-based test.
         ASSERT(!result.innerNode() || (request.resultIsElementList() && result.listBasedTestResult().size()));
@@ -5051,6 +5342,50 @@ bool RenderLayer::hitTestContents(const HitTestRequest& request, HitTestResult& 
     }
         
     return true;
+}
+
+RenderLayer::HitLayer RenderLayer::hitTestSVGChildrenInDOMOrder(RenderLayer* rootLayer, const HitTestRequest& request, HitTestResult& result,
+    const LayoutRect& hitTestRect, const HitTestLocation& hitTestLocation, const HitTestingTransformState* transformState, double* zOffsetForDescendants)
+{
+    // SVG hit tests children in DOM order, interleaving both layer and non-layer
+    // children. z-index can override the order. This mirrors paintSVGChildrenInDOMOrder().
+
+    auto allChildren = collectSVGChildrenInDOMOrder();
+    if (allChildren.isEmpty())
+        return { };
+
+    // Hit test in reverse order (front-to-back).
+    for (int i = allChildren.size() - 1; i >= 0; --i) {
+        auto& childToPaint = allChildren[i];
+
+        if (childToPaint.layer) {
+            // Layer children use the standard hit test path with original coordinates.
+            auto hitLayer = childToPaint.layer->hitTestLayer(rootLayer, this, request, result, hitTestRect, hitTestLocation, false, transformState, zOffsetForDescendants);
+            if (hitLayer.layer)
+                return hitLayer;
+            continue;
+        }
+
+        // Non-layer child: convert hit test point to SVG coordinates.
+        auto* svgModelObject = dynamicDowncast<RenderSVGModelObject>(renderer());
+        if (!svgModelObject)
+            continue;
+
+        auto svgOffset = svgModelObject->nominalSVGLayoutLocation();
+        HitTestLocation svgLocation(hitTestLocation, toLayoutSize(svgOffset));
+
+        // Accumulate offsets from non-layered ancestors between the child and the layer's renderer.
+        LayoutPoint accumulatedOffset(svgOffset);
+        for (auto* ancestor = childToPaint.renderer->parent(); ancestor && ancestor != &renderer(); ancestor = ancestor->parent()) {
+            if (auto* svgModel = dynamicDowncast<RenderSVGModelObject>(ancestor))
+                accumulatedOffset.moveBy(svgModel->currentSVGLayoutLocation());
+        }
+
+        if (childToPaint.renderer->nodeAtPoint(request, result, svgLocation, accumulatedOffset, HitTestForeground))
+            return { this, 0 };
+    }
+
+    return { };
 }
 
 RenderLayer::HitLayer RenderLayer::hitTestList(LayerList layerIterator, RenderLayer* rootLayer, const HitTestRequest& request, HitTestResult& result, const LayoutRect& hitTestRect, const HitTestLocation& hitTestLocation, const HitTestingTransformState* transformState, double* zOffsetForDescendants, bool depthSortDescendants)

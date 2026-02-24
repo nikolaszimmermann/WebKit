@@ -114,6 +114,13 @@ void RenderSVGViewportContainer::updateFromStyle()
         setHasNonVisibleOverflow();
 }
 
+bool RenderSVGViewportContainer::pointIsInsideViewportClip(const FloatPoint& point)
+{
+    if (!SVGRenderSupport::isOverflowHidden(*this))
+        return true;
+    return viewport().contains(point);
+}
+
 inline AffineTransform viewBoxToViewTransform(const SVGSVGElement& svgSVGElement, const FloatSize& viewportSize)
 {
     return svgSVGElement.viewBoxToViewTransform(viewportSize.width(), viewportSize.height());

@@ -457,6 +457,7 @@ public:
     inline RenderSVGHiddenContainer* enclosingSVGHiddenOrResourceContainer() const;
 
     void repaintIncludingDescendants();
+    void computeRepaintRectsIncludingDescendants();
 
     // Indicate that the layer contents need to be repainted. Only has an effect
     // if layer compositing is being used.
@@ -1058,7 +1059,6 @@ private:
     }
 
     void computeRepaintRects(const RenderLayerModelObject* repaintContainer);
-    void computeRepaintRectsIncludingDescendants();
 
     void compositingStatusChanged(LayoutUpToDate);
 
@@ -1201,6 +1201,15 @@ private:
     void paintLayerContentsAndReflection(GraphicsContext&, const LayerPaintingInfo&, OptionSet<PaintLayerFlag>);
     void paintLayerByApplyingTransform(GraphicsContext&, const LayerPaintingInfo&, OptionSet<PaintLayerFlag>, const LayoutSize& translationOffset = LayoutSize());
     void paintLayerContents(GraphicsContext&, const LayerPaintingInfo&, OptionSet<PaintLayerFlag>);
+    struct SVGPaintOrderAwareChild {
+        RenderElement* renderer;
+        RenderLayer* layer; // null for non-layer children
+        int zIndex;
+    };
+    Vector<SVGPaintOrderAwareChild> collectSVGChildrenInDOMOrder(HashSet<const RenderElement*>* splitContainers = nullptr) const;
+
+    enum class SVGChildPaintScope : uint8_t { All, BeforeFirstCompositedChild, FromFirstCompositedChild };
+    void paintSVGChildrenInDOMOrder(GraphicsContext&, const LayerPaintingInfo&, OptionSet<PaintLayerFlag>, const LayerFragments&, OptionSet<PaintBehavior>, RenderObject* subtreePaintRootForRenderer, SVGChildPaintScope = SVGChildPaintScope::All);
     void paintList(LayerList, GraphicsContext&, const LayerPaintingInfo&, OptionSet<PaintLayerFlag>);
 
     void updatePaintingInfoForFragments(LayerFragments&, const LayerPaintingInfo&, OptionSet<PaintLayerFlag>, bool shouldPaintContent, const LayoutSize& offsetFromRoot);
@@ -1233,6 +1242,8 @@ private:
     HitLayer hitTestList(LayerList, RenderLayer* rootLayer, const HitTestRequest&, HitTestResult&,
         const LayoutRect& hitTestRect, const HitTestLocation&,
         const HitTestingTransformState*, double* zOffsetForDescendants, bool depthSortDescendants);
+    HitLayer hitTestSVGChildrenInDOMOrder(RenderLayer* rootLayer, const HitTestRequest&, HitTestResult&,
+        const LayoutRect& hitTestRect, const HitTestLocation&, const HitTestingTransformState*, double* zOffsetForDescendants);
 
     Ref<HitTestingTransformState> createLocalTransformState(RenderLayer* rootLayer, RenderLayer* containerLayer,
         const LayoutRect& hitTestRect, const HitTestLocation&,
