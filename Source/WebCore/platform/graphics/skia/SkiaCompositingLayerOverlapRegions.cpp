@@ -31,7 +31,9 @@
 #if USE(COORDINATED_GRAPHICS) && USE(SKIA) && !USE(TEXTURE_MAPPER)
 #include "FloatRect.h"
 #include "TransformationMatrix.h"
+#include <algorithm>
 #include <array>
+#include <cmath>
 
 namespace WebCore {
 
@@ -147,10 +149,13 @@ IntRect ComputeOverlapRegionData::transformedBoundingBox(const TransformationMat
     };
 
     auto clipped = [&](const MinMax<double>& xMinMax, const MinMax<double>& yMinMax) -> IntRect {
-        int minX = std::max<double>(xMinMax.min, clipBounds.x());
-        int minY = std::max<double>(yMinMax.min, clipBounds.y());
-        int maxX = std::min<double>(xMinMax.max, clipBounds.maxX());
-        int maxY = std::min<double>(yMinMax.max, clipBounds.maxY());
+        if (clipBounds.isEmpty())
+            return { };
+
+        int minX = std::floor(std::clamp<double>(xMinMax.min, clipBounds.x(), clipBounds.maxX()));
+        int minY = std::floor(std::clamp<double>(yMinMax.min, clipBounds.y(), clipBounds.maxY()));
+        int maxX = std::ceil(std::clamp<double>(xMinMax.max, clipBounds.x(), clipBounds.maxX()));
+        int maxY = std::ceil(std::clamp<double>(yMinMax.max, clipBounds.y(), clipBounds.maxY()));
         return { minX, minY, maxX - minX, maxY - minY };
     };
 

@@ -29,10 +29,10 @@
 #if USE(COORDINATED_GRAPHICS) && USE(SKIA) && !USE(TEXTURE_MAPPER)
 #include "IntRect.h"
 #include "Region.h"
+#include "TransformationMatrix.h"
 
 namespace WebCore {
 class FloatRect;
-class TransformationMatrix;
 
 static constexpr size_t cOverlapRegionConsolidationThreshold = 4;
 
@@ -47,6 +47,7 @@ struct ComputeOverlapRegionData {
     IntRect clipBounds;
     Region overlapRegion;
     Region nonOverlapRegion;
+    TransformationMatrix canvasTransform;
 
     void resolveOverlaps(const IntRect&);
     IntRect transformedBoundingBox(const TransformationMatrix&, const FloatRect&) const;
