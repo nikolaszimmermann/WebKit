@@ -882,7 +882,6 @@ imported/w3c/web-platform-tests/css/css-flexbox/select-element-multiple.html [ P
 imported/w3c/web-platform-tests/css/css-backgrounds/background-size-043.html [ Pass ]
 imported/w3c/web-platform-tests/css/css-backgrounds/background-size-044.html [ Pass ]
 
-imported/w3c/web-platform-tests/css/css-animations/nested-scale-animations.html [ Pass ]
 imported/w3c/web-platform-tests/css/css-transforms/transform3d-matrix3d-001.html [ Pass ]
 imported/w3c/web-platform-tests/css/filter-effects/css-filters-animation-combined-001.html [ Pass ]
 
@@ -5171,12 +5170,11 @@ webkit.org/b/317607 http/tests/media/track/track-removal-clears-pending-list.htm
 webkit.org/b/319954 [ x86_64 ] imported/w3c/web-platform-tests/css/css-text/white-space/white-space-trim-inline-block.html [ ImageOnlyFailure ]
 webkit.org/b/319954 [ arm64 ] imported/w3c/web-platform-tests/css/css-text/white-space/white-space-trim-inline-block.html [ Pass ImageOnlyFailure ]
 
-webkit.org/b/317966 [ x86_64 ] http/tests/web-locks/web-lock-in-serviceworker.html [ Crash Failure Pass ]
+webkit.org/b/317966 http/tests/web-locks/web-lock-in-serviceworker.html [ Crash Failure Pass ]
 webkit.org/b/317968 [ x86_64 ] imported/w3c/web-platform-tests/navigation-timing/nav2-test-redirect-server.html [ Pass Failure ]
 
 webkit.org/b/318434 ipc/send-gpu-GetShareableBitmap-RemoteRenderingBackend.html [ Crash Pass ]
 
-webkit.org/b/318634 ipc/loadping-firstpartyforcookies-message-check.html [ Failure ]
 
 webkit.org/b/319043 http/wpt/navigation-api/traverse-subframe-remote-sibling.sub.html [ Crash ]
 webkit.org/b/319044 imported/w3c/web-platform-tests/html/rendering/widgets/shadow-dom.html [ Failure ]
