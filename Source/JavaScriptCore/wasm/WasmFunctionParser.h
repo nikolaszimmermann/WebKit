@@ -3893,13 +3893,14 @@ FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
             m_expressionStack.shrink(m_currentStackBegin);
             m_expressionStack.append(data.elseBlockStack.span());
         }
-        // When ending an 'if'/'else', including a synthetic 'else' added right above,
-        // the spec requires the output type of 'if' to be the type from the signature.
-        const bool shouldForceSignature = ControlType::isElse(data.controlData);
+
         // FIXME: endBlock may modify the expressionStack slice for the result of the block.
         // That's a little too effectful but we don't have a better API right now.
         // see: https://bugs.webkit.org/show_bug.cgi?id=164353
-        WASM_FAIL_IF_HELPER_FAILS(checkExpressionStack(data.controlData, shouldForceSignature));
+
+        // The spec requires the output type of a structured control instruction to be
+        // the result type from its signature, even when the fallthrough value is a subtype.
+        WASM_FAIL_IF_HELPER_FAILS(checkExpressionStack(data.controlData, true));
 
         const uint32_t parentBegin = parentEntryBegin();
         auto enclosedStack = m_expressionStack.mutableSpan().subspan(parentBegin);
@@ -3964,36 +3965,36 @@ FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
         return { };
     }
 #if ENABLE(B3_JIT)
-    case ExtSIMD: {
-        WASM_PARSER_FAIL_IF(!Options::useWasmSIMD(), "wasm-simd is not enabled"_s);
-        m_context.notifyFunctionUsesSIMD();
-        WASM_PARSER_FAIL_IF(!parseVarUInt32(m_currentExtOp), "can't parse wasm extended opcode"_s);
-        m_context.willParseExtendedOpcode();
-
-        constexpr bool isReachable = true;
-
-        ExtSIMDOpType op = static_cast<ExtSIMDOpType>(m_currentExtOp);
-        if (Options::dumpWasmOpcodeStatistics()) [[unlikely]]
-            WasmOpcodeCounter::singleton().increment(op);
-
-        switch (op) {
-        #define CREATE_SIMD_CASE(name, _, laneOp, lane, signMode) case ExtSIMDOpType::name: return simd<isReachable>(SIMDLaneOperation::laneOp, lane, signMode);
-        FOR_EACH_WASM_EXT_SIMD_GENERAL_OP(CREATE_SIMD_CASE)
-        #undef CREATE_SIMD_CASE
-        #define CREATE_SIMD_CASE(name, _, laneOp, lane, signMode, relArg) case ExtSIMDOpType::name: return simd<isReachable>(SIMDLaneOperation::laneOp, lane, signMode, relArg);
-        FOR_EACH_WASM_EXT_SIMD_REL_OP(CREATE_SIMD_CASE)
-        #undef CREATE_SIMD_CASE
-        default:
-            WASM_PARSER_FAIL_IF(true, "invalid extended simd op "_s, m_currentExtOp);
-            break;
+        case ExtSIMD: {
+            WASM_PARSER_FAIL_IF(!Options::useWasmSIMD(), "wasm-simd is not enabled"_s);
+            m_context.notifyFunctionUsesSIMD();
+            WASM_PARSER_FAIL_IF(!parseVarUInt32(m_currentExtOp), "can't parse wasm extended opcode"_s);
+            m_context.willParseExtendedOpcode();
+    
+            constexpr bool isReachable = true;
+    
+            ExtSIMDOpType op = static_cast<ExtSIMDOpType>(m_currentExtOp);
+            if (Options::dumpWasmOpcodeStatistics()) [[unlikely]]
+                WasmOpcodeCounter::singleton().increment(op);
+    
+            switch (op) {
+            #define CREATE_SIMD_CASE(name, _, laneOp, lane, signMode) case ExtSIMDOpType::name: return simd<isReachable>(SIMDLaneOperation::laneOp, lane, signMode);
+            FOR_EACH_WASM_EXT_SIMD_GENERAL_OP(CREATE_SIMD_CASE)
+            #undef CREATE_SIMD_CASE
+            #define CREATE_SIMD_CASE(name, _, laneOp, lane, signMode, relArg) case ExtSIMDOpType::name: return simd<isReachable>(SIMDLaneOperation::laneOp, lane, signMode, relArg);
+            FOR_EACH_WASM_EXT_SIMD_REL_OP(CREATE_SIMD_CASE)
+            #undef CREATE_SIMD_CASE
+            default:
+                WASM_PARSER_FAIL_IF(true, "invalid extended simd op "_s, m_currentExtOp);
+                break;
+            }
+            return { };
         }
-        return { };
-    }
-#else
-    case ExtSIMD:
-        WASM_PARSER_FAIL_IF(true, "wasm-simd is not supported"_s);
-        return { };
-#endif
+    #else
+        case ExtSIMD:
+            WASM_PARSER_FAIL_IF(true, "wasm-simd is not supported"_s);
+            return { };
+    #endif
     }
 
     ASSERT_NOT_REACHED();
