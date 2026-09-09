@@ -247,7 +247,13 @@ private:
     [[nodiscard]] PartialResult parseUnreachableExpression();
     [[nodiscard]] PartialResult unifyControl(ArgumentList&, unsigned level);
     [[nodiscard]] PartialResult checkLocalInitialized(uint32_t);
-    [[nodiscard]] PartialResult checkExpressionStack(const ControlType&, bool forceSignature = false);
+
+    enum FallThroughStateTag {
+        NewSiblingBlock,
+        MergePoint,
+    };
+
+    [[nodiscard]] PartialResult checkBlockFallthrough(const ControlType&, FallThroughStateTag);
 
     enum BranchConditionalityTag {
         Unconditional,
@@ -1932,7 +1938,7 @@ auto FunctionParser<Context>::checkLocalInitialized(uint32_t index) -> PartialRe
 }
 
 template<typename Context>
-auto FunctionParser<Context>::checkExpressionStack(const ControlType& controlData, bool forceSignature) -> PartialResult
+auto FunctionParser<Context>::checkBlockFallthrough(const ControlType& controlData, FallThroughStateTag fallthrough) -> PartialResult
 {
     const auto& blockSignature = controlData.signature();
     const uint32_t sliceSize = m_expressionStack.size() - m_currentStackBegin;
@@ -1941,7 +1947,11 @@ auto FunctionParser<Context>::checkExpressionStack(const ControlType& controlDat
         const auto actualType = m_expressionStack[m_currentStackBegin + i].type();
         const auto expectedType = blockSignature.returnType(i);
         WASM_VALIDATOR_FAIL_IF(!isSubtype(actualType, expectedType), "control flow returns with unexpected type. "_s, actualType, " is not a "_s, expectedType);
-        if (forceSignature)
+        // The spec requires the output type of a structured control instruction to be
+        // the result type from its signature, even when the fallthrough value is a subtype.
+        // FIXME: We should support some sort of abstract interpretation so this can be the
+        // least upper bound of the merging CFG.
+        if (fallthrough == MergePoint)
             m_expressionStack[m_currentStackBegin + i].setType(expectedType);
     }
 
@@ -2081,21 +2091,21 @@ template<typename Context>
 auto FunctionParser<Context>::parseExpression() -> PartialResult
 {
     switch (m_currentOpcode) {
-#define CREATE_CASE(name, id, b3op, inc, lhsType, rhsType, returnType) case OpType::name: return binaryCase(OpType::name, &Context::add##name, Types::returnType, Types::lhsType, Types::rhsType);
+    #define CREATE_CASE(name, id, b3op, inc, lhsType, rhsType, returnType) case OpType::name: return binaryCase(OpType::name, &Context::add##name, Types::returnType, Types::lhsType, Types::rhsType);
         FOR_EACH_WASM_NON_COMPARE_BINARY_OP(CREATE_CASE)
-#undef CREATE_CASE
+    #undef CREATE_CASE
 
-#define CREATE_CASE(name, id, b3op, inc, lhsType, rhsType, returnType) case OpType::name: return binaryCompareCase(OpType::name, &Context::add##name, Types::returnType, Types::lhsType, Types::rhsType);
+    #define CREATE_CASE(name, id, b3op, inc, lhsType, rhsType, returnType) case OpType::name: return binaryCompareCase(OpType::name, &Context::add##name, Types::returnType, Types::lhsType, Types::rhsType);
         FOR_EACH_WASM_COMPARE_BINARY_OP(CREATE_CASE)
-#undef CREATE_CASE
+    #undef CREATE_CASE
 
-#define CREATE_CASE(name, id, b3op, inc, operandType, returnType) case OpType::name: return unaryCase(OpType::name, &Context::add##name, Types::returnType, Types::operandType);
+    #define CREATE_CASE(name, id, b3op, inc, operandType, returnType) case OpType::name: return unaryCase(OpType::name, &Context::add##name, Types::returnType, Types::operandType);
         FOR_EACH_WASM_NON_COMPARE_UNARY_OP(CREATE_CASE)
-#undef CREATE_CASE
+    #undef CREATE_CASE
 
-#define CREATE_CASE(name, id, b3op, inc, operandType, returnType) case OpType::name: return unaryCompareCase(OpType::name, &Context::add##name, Types::returnType, Types::operandType);
+    #define CREATE_CASE(name, id, b3op, inc, operandType, returnType) case OpType::name: return unaryCompareCase(OpType::name, &Context::add##name, Types::returnType, Types::operandType);
         FOR_EACH_WASM_COMPARE_UNARY_OP(CREATE_CASE)
-#undef CREATE_CASE
+    #undef CREATE_CASE
 
     case Select: {
         TypedExpression condition;
@@ -2141,13 +2151,13 @@ auto FunctionParser<Context>::parseExpression() -> PartialResult
         return { };
     }
 
-#define CREATE_CASE(name, id, b3op, inc, memoryType) case OpType::name: return load(Types::memoryType);
-FOR_EACH_WASM_MEMORY_LOAD_OP(CREATE_CASE)
-#undef CREATE_CASE
+    #define CREATE_CASE(name, id, b3op, inc, memoryType) case OpType::name: return load(Types::memoryType);
+    FOR_EACH_WASM_MEMORY_LOAD_OP(CREATE_CASE)
+    #undef CREATE_CASE
 
-#define CREATE_CASE(name, id, b3op, inc, memoryType) case OpType::name: return store(Types::memoryType);
-FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
-#undef CREATE_CASE
+    #define CREATE_CASE(name, id, b3op, inc, memoryType) case OpType::name: return store(Types::memoryType);
+    FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
+    #undef CREATE_CASE
 
     case F32Const: {
         uint32_t constant;
@@ -2414,9 +2424,9 @@ FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
             break;
         }
 
-#define CREATE_CASE(name, id, b3op, inc, operandType, returnType) case Ext1OpType::name: return truncSaturated(op, Types::returnType, Types::operandType);
+    #define CREATE_CASE(name, id, b3op, inc, operandType, returnType) case Ext1OpType::name: return truncSaturated(op, Types::returnType, Types::operandType);
         FOR_EACH_WASM_TRUNC_SATURATED_OP(CREATE_CASE)
-#undef CREATE_CASE
+    #undef CREATE_CASE
 
         case Ext1OpType::I64Add128:
         case Ext1OpType::I64Sub128: {
@@ -3085,21 +3095,21 @@ FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
         m_context.willParseExtendedOpcode();
 
         ExtAtomicOpType op = static_cast<ExtAtomicOpType>(m_currentExtOp);
-#if ENABLE(WEBASSEMBLY_OMGJIT)
+    #if ENABLE(WEBASSEMBLY_OMGJIT)
         if (Options::dumpWasmOpcodeStatistics()) [[unlikely]]
             WasmOpcodeCounter::singleton().increment(op);
-#endif
+    #endif
 
         switch (op) {
-#define CREATE_CASE(name, id, b3op, inc, memoryType) case ExtAtomicOpType::name: return atomicLoad(op, Types::memoryType);
+    #define CREATE_CASE(name, id, b3op, inc, memoryType) case ExtAtomicOpType::name: return atomicLoad(op, Types::memoryType);
         FOR_EACH_WASM_EXT_ATOMIC_LOAD_OP(CREATE_CASE)
-#undef CREATE_CASE
-#define CREATE_CASE(name, id, b3op, inc, memoryType) case ExtAtomicOpType::name: return atomicStore(op, Types::memoryType);
+    #undef CREATE_CASE
+    #define CREATE_CASE(name, id, b3op, inc, memoryType) case ExtAtomicOpType::name: return atomicStore(op, Types::memoryType);
         FOR_EACH_WASM_EXT_ATOMIC_STORE_OP(CREATE_CASE)
-#undef CREATE_CASE
-#define CREATE_CASE(name, id, b3op, inc, memoryType) case ExtAtomicOpType::name: return atomicBinaryRMW(op, Types::memoryType);
+    #undef CREATE_CASE
+    #define CREATE_CASE(name, id, b3op, inc, memoryType) case ExtAtomicOpType::name: return atomicBinaryRMW(op, Types::memoryType);
         FOR_EACH_WASM_EXT_ATOMIC_BINARY_RMW_OP(CREATE_CASE)
-#undef CREATE_CASE
+    #undef CREATE_CASE
         case ExtAtomicOpType::MemoryAtomicWait64:
             return atomicWait(op, Types::I64);
         case ExtAtomicOpType::MemoryAtomicWait32:
@@ -3577,7 +3587,7 @@ FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
         ControlEntry& controlEntry = m_controlStack.last();
 
         WASM_VALIDATOR_FAIL_IF(!ControlType::isIf(controlEntry.controlData), "else block isn't associated to an if");
-        WASM_FAIL_IF_HELPER_FAILS(checkExpressionStack(controlEntry.controlData));
+        WASM_FAIL_IF_HELPER_FAILS(checkBlockFallthrough(controlEntry.controlData, NewSiblingBlock));
         auto ifBranchResults = m_expressionStack.mutableSpan().subspan(m_currentStackBegin);
         WASM_TRY_ADD_TO_CONTEXT(addElse(controlEntry.controlData, ifBranchResults));
         m_expressionStack.shrink(m_currentStackBegin);
@@ -3618,7 +3628,7 @@ FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
 
         ControlEntry& controlEntry = m_controlStack.last();
         WASM_VALIDATOR_FAIL_IF(!isTryOrCatch(controlEntry.controlData), "catch block isn't associated to a try");
-        WASM_FAIL_IF_HELPER_FAILS(checkExpressionStack(controlEntry.controlData));
+        WASM_FAIL_IF_HELPER_FAILS(checkBlockFallthrough(controlEntry.controlData, NewSiblingBlock));
 
         ResultList results;
         auto preCatchStack = m_expressionStack.mutableSpan().subspan(m_currentStackBegin);
@@ -3644,7 +3654,7 @@ FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
         ControlEntry& controlEntry = m_controlStack.last();
 
         WASM_VALIDATOR_FAIL_IF(!isTryOrCatch(controlEntry.controlData), "catch block isn't associated to a try");
-        WASM_FAIL_IF_HELPER_FAILS(checkExpressionStack(controlEntry.controlData));
+        WASM_FAIL_IF_HELPER_FAILS(checkBlockFallthrough(controlEntry.controlData, NewSiblingBlock));
 
         auto preCatchStack = m_expressionStack.mutableSpan().subspan(m_currentStackBegin);
         WASM_TRY_ADD_TO_CONTEXT(addCatchAll(preCatchStack, controlEntry.controlData));
@@ -3752,7 +3762,7 @@ FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
         WASM_VALIDATOR_FAIL_IF(!ControlType::isTry(targetData) && !ControlType::isTopLevel(targetData), "delegate target isn't a try or the top level block");
 
         WASM_TRY_ADD_TO_CONTEXT(addDelegate(targetData, controlEntry.controlData));
-        WASM_FAIL_IF_HELPER_FAILS(checkExpressionStack(controlEntry.controlData));
+        WASM_FAIL_IF_HELPER_FAILS(checkBlockFallthrough(controlEntry.controlData, NewSiblingBlock));
 
         const uint32_t parentBegin = parentEntryBegin();
         auto enclosedStack = m_expressionStack.mutableSpan().subspan(parentBegin);
@@ -3887,20 +3897,16 @@ FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
     case End: {
         ControlEntry data = m_controlStack.takeLast();
         if (ControlType::isIf(data.controlData)) {
-            WASM_FAIL_IF_HELPER_FAILS(checkExpressionStack(data.controlData));
+            WASM_FAIL_IF_HELPER_FAILS(checkBlockFallthrough(data.controlData, NewSiblingBlock));
             auto ifBranchResults = m_expressionStack.mutableSpan().subspan(m_currentStackBegin);
             WASM_TRY_ADD_TO_CONTEXT(addElse(data.controlData, ifBranchResults));
             m_expressionStack.shrink(m_currentStackBegin);
             m_expressionStack.append(data.elseBlockStack.span());
         }
-
         // FIXME: endBlock may modify the expressionStack slice for the result of the block.
         // That's a little too effectful but we don't have a better API right now.
         // see: https://bugs.webkit.org/show_bug.cgi?id=164353
-
-        // The spec requires the output type of a structured control instruction to be
-        // the result type from its signature, even when the fallthrough value is a subtype.
-        WASM_FAIL_IF_HELPER_FAILS(checkExpressionStack(data.controlData, true));
+        WASM_FAIL_IF_HELPER_FAILS(checkBlockFallthrough(data.controlData, MergePoint));
 
         const uint32_t parentBegin = parentEntryBegin();
         auto enclosedStack = m_expressionStack.mutableSpan().subspan(parentBegin);
@@ -3964,19 +3970,19 @@ FOR_EACH_WASM_MEMORY_STORE_OP(CREATE_CASE)
 
         return { };
     }
-#if ENABLE(B3_JIT)
+    #if ENABLE(B3_JIT)
         case ExtSIMD: {
             WASM_PARSER_FAIL_IF(!Options::useWasmSIMD(), "wasm-simd is not enabled"_s);
             m_context.notifyFunctionUsesSIMD();
             WASM_PARSER_FAIL_IF(!parseVarUInt32(m_currentExtOp), "can't parse wasm extended opcode"_s);
             m_context.willParseExtendedOpcode();
-    
+
             constexpr bool isReachable = true;
-    
+
             ExtSIMDOpType op = static_cast<ExtSIMDOpType>(m_currentExtOp);
             if (Options::dumpWasmOpcodeStatistics()) [[unlikely]]
                 WasmOpcodeCounter::singleton().increment(op);
-    
+
             switch (op) {
             #define CREATE_SIMD_CASE(name, _, laneOp, lane, signMode) case ExtSIMDOpType::name: return simd<isReachable>(SIMDLaneOperation::laneOp, lane, signMode);
             FOR_EACH_WASM_EXT_SIMD_GENERAL_OP(CREATE_SIMD_CASE)
@@ -4102,7 +4108,7 @@ auto FunctionParser<Context>::parseUnreachableExpression() -> PartialResult
                 WASM_TRY_ADD_TO_CONTEXT(addElseToUnreachable(data.controlData));
                 m_expressionStack.shrink(m_currentStackBegin);
                 m_expressionStack.append(data.elseBlockStack.span());
-                WASM_FAIL_IF_HELPER_FAILS(checkExpressionStack(data.controlData));
+                WASM_FAIL_IF_HELPER_FAILS(checkBlockFallthrough(data.controlData, MergePoint));
 
                 // Reachable End handling: the combined enclosedStack now lives in
                 // m_expressionStack[parentBegin..end].
