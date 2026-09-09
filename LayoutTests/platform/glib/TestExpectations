@@ -5137,7 +5137,6 @@ webkit.org/b/292843 fast/dom/Window/open-window-min-size.html [ Failure ]
 webkit.org/b/316573 fast/parser/empty-text-resource.html [ Pass Timeout ]
 webkit.org/b/316575 [ x86_64 ] http/tests/IndexedDB/collect-IDB-objects.https.html [ Pass Crash ]
 
-webkit.org/b/317006 ipc/indexed-colorspace-null-inner-crash.html [ Crash ]
 webkit.org/b/317007 fast/replaced/replaced-percentage-size-in-aspect-ratio-shrink-to-fit.html [ ImageOnlyFailure ]
 webkit.org/b/317008 imported/w3c/web-platform-tests/html/semantics/embedded-content/the-img-element/sizes/sizes-auto-resize-observer-removes-auto.html [ Pass Failure ]
 webkit.org/b/317011 imported/w3c/web-platform-tests/css/css-shapes/shape-outside/shape-image/shape-image-018.html [ Pass Timeout ]
