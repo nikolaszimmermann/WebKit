@@ -48,7 +48,6 @@
 #include "SVGResourcesCache.h"
 #include "Settings.h"
 #include "StylePrimitiveNumericTypes+Evaluation.h"
-#include <numbers>
 #include <wtf/MathExtras.h>
 
 namespace WebCore {
@@ -206,12 +205,6 @@ static AffineTransform& NODELETE currentContentTransformation()
 {
     static NeverDestroyed<AffineTransform> s_currentContentTransformation;
     return s_currentContentTransformation;
-}
-
-float SVGRenderingContext::calculateScreenFontSizeScalingFactor(const RenderObject& renderer)
-{
-    AffineTransform ctm = calculateTransformationToOutermostCoordinateSystem(renderer);
-    return narrowPrecisionToFloat(std::hypot(ctm.xScale(), ctm.yScale()) / std::numbers::sqrt2);
 }
 
 AffineTransform SVGRenderingContext::calculateTransformationToOutermostCoordinateSystem(const RenderObject& renderer)

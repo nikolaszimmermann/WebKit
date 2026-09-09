@@ -61,17 +61,13 @@ void LegacyRenderSVGResourceGradient::removeClientFromCache(RenderElement& clien
     m_gradientMap.remove(client);
 }
 
-GradientData::Inputs LegacyRenderSVGResourceGradient::computeInputs(RenderElement& renderer, OptionSet<RenderSVGResourceMode> resourceMode)
+GradientData::Inputs LegacyRenderSVGResourceGradient::computeInputs(RenderElement& renderer)
 {
     std::optional<FloatRect> objectBoundingBox;
     if (gradientUnits() == SVGUnitTypes::SVG_UNIT_TYPE_OBJECTBOUNDINGBOX)
         objectBoundingBox = renderer.objectBoundingBox();
 
-    float textPaintingScale = 1;
-    if (resourceMode.contains(RenderSVGResourceMode::ApplyToText))
-        textPaintingScale = computeTextPaintingScale(renderer);
-
-    return { objectBoundingBox, textPaintingScale };
+    return { objectBoundingBox };
 }
 
 GradientData* LegacyRenderSVGResourceGradient::gradientDataForRenderer(RenderElement& renderer, const Style::ComputedStyle& style, OptionSet<RenderSVGResourceMode> resourceMode)
@@ -90,7 +86,7 @@ GradientData* LegacyRenderSVGResourceGradient::gradientDataForRenderer(RenderEle
 
     // Spec: When the geometry of the applicable element has no width or height and objectBoundingBox is specified,
     // then the given effect (e.g. a gradient or a filter) will be ignored.
-    auto inputs = computeInputs(renderer, resourceMode);
+    auto inputs = computeInputs(renderer);
     if (inputs.objectBoundingBox && inputs.objectBoundingBox->isEmpty())
         return nullptr;
 
@@ -118,11 +114,6 @@ GradientData* LegacyRenderSVGResourceGradient::gradientDataForRenderer(RenderEle
         }
 
         gradientData.userspaceTransform *= gradientTransform();
-
-        // Depending on font scaling factor, we may need to rescale the gradient here since
-        // text painting removes the scale factor from the context.
-        if (gradientData.inputs.textPaintingScale != 1)
-            gradientData.userspaceTransform.scale(gradientData.inputs.textPaintingScale);
     }
 
     return &gradientData;

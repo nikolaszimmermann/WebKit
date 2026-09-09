@@ -29,7 +29,6 @@
 #include "RenderView.h"
 #include "SVGElementTypeHelpers.h"
 #include "SVGGraphicsElement.h"
-#include "SVGRenderingContext.h"
 #include "SVGResourcesCache.h"
 #include <wtf/InlineWeakPtr.h>
 #include <wtf/SetForScope.h>
@@ -231,22 +230,6 @@ void LegacyRenderSVGResourceContainer::registerResource()
         SVGResourcesCache::clientStyleChanged(*renderer, Style::DifferenceResult::Layout, nullptr, renderer->style());
         renderer->setNeedsLayout();
     }
-}
-
-float LegacyRenderSVGResourceContainer::computeTextPaintingScale(const RenderElement& renderer)
-{
-#if USE(CG)
-    UNUSED_PARAM(renderer);
-    return 1;
-#else
-    // This method should only be called for RenderObjects that deal with text rendering. Cmp. RenderObject.h's is*() methods.
-    ASSERT(renderer.isRenderSVGText() || renderer.isRenderSVGTextPath() || renderer.isRenderSVGInline());
-
-    // In text drawing, the scaling part of the graphics context CTM is removed, compare SVGInlineTextBox::paintTextWithShadows.
-    // So, we use that scaling factor here, too, and then push it down to pattern or gradient space
-    // in order to keep the pattern or gradient correctly scaled.
-    return SVGRenderingContext::calculateScreenFontSizeScalingFactor(renderer);
-#endif
 }
 
 // FIXME: This does not belong here.

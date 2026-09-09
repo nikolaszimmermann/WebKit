@@ -68,7 +68,7 @@ private:
 
     RefPtr<ImageBuffer> createTileImage(GraphicsContext&, const FloatSize&, const FloatSize& scale, const AffineTransform& tileImageTransform, const PatternAttributes&) const;
 
-    PatternData* buildPattern(RenderElement&, OptionSet<RenderSVGResourceMode>, GraphicsContext&);
+    PatternData* buildPattern(RenderElement&, GraphicsContext&);
 
     PatternAttributes m_attributes;
     HashMap<SingleThreadWeakRef<RenderElement>, std::unique_ptr<PatternData>> m_patternMap;

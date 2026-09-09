@@ -48,7 +48,7 @@ layer at (0,0) size 450x500
             chunk 1 text run 1 at (4.75,3.20) startOffset 0 endOffset 1 width 0.08: " "
           RenderSVGTSpan {tspan} at (3,0) size 2x1
             RenderSVGInlineText {#text} at (3,0) size 1x1
-              chunk 1 text run 1 at (4.82,3.20) startOffset 0 endOffset 8 width 0.98: "posture,"
+              chunk 1 text run 1 at (4.82,3.20) startOffset 0 endOffset 8 width 0.97: "posture,"
           RenderSVGInlineText {#text} at (4,0) size 1x1
             chunk 1 text run 1 at (5.80,3.20) startOffset 0 endOffset 5 width 0.58: " and "
           RenderSVGTSpan {tspan} at (5,0) size 2x1
@@ -149,7 +149,7 @@ layer at (0,0) size 450x500
                 chunk 1 text run 3 at (0.65,0.29) startOffset 2 endOffset 3 width 0.13: "a"
                 chunk 1 text run 4 at (0.74,0.23) startOffset 3 endOffset 4 width 0.08: "l"
                 chunk 1 text run 5 at (0.81,0.20) startOffset 4 endOffset 5 width 0.08: "l"
-                chunk 1 text run 6 at (0.89,0.18) startOffset 5 endOffset 6 width 0.08: " "
+                chunk 1 text run 6 at (0.89,0.18) startOffset 5 endOffset 6 width 0.07: " "
                 chunk 1 text run 7 at (0.97,0.18) startOffset 6 endOffset 7 width 0.08: "t"
                 chunk 1 text run 8 at (1.07,0.21) startOffset 7 endOffset 8 width 0.13: "e"
                 chunk 1 text run 9 at (1.19,0.29) startOffset 8 endOffset 9 width 0.15: "x"
