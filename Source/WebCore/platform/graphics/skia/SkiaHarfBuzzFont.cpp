@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2024 Igalia S.L.
+ * Copyright (C) 2024, 2026 Igalia S.L.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -129,6 +129,7 @@ SkiaHarfBuzzFont::SkiaHarfBuzzFont(SkTypeface& typeface)
     , m_isColorBitmapFont(FontPlatformData::skiaTypefaceHasAnySupportedColorTable(typeface))
 {
     auto hbFace = createHarfBuzzFace(typeface);
+    m_unitsPerEm = hb_face_get_upem(hbFace.get());
     HbUniquePtr<hb_font_t> hbFont(hb_font_create(hbFace.get()));
 
     if (int axisCount = typeface.getVariationDesignPosition({ }); axisCount > 0) {
@@ -150,7 +151,7 @@ SkiaHarfBuzzFont::~SkiaHarfBuzzFont()
 static inline hb_position_t skScalarToHarfBuzzPosition(SkScalar value)
 {
     static constexpr int hbPosition = 1 << 16;
-    return clampTo<int>(value * hbPosition);
+    return clampTo<int>(SkScalarRoundToScalar(value * hbPosition));
 }
 
 hb_font_t* SkiaHarfBuzzFont::scaledFont(const FontPlatformData& fontPlatformData)
@@ -194,8 +195,23 @@ std::optional<hb_codepoint_t> SkiaHarfBuzzFont::glyph(hb_codepoint_t unicode, st
     return std::nullopt;
 }
 
+float SkiaHarfBuzzFont::linearWidthForGlyph(hb_codepoint_t glyph, float size) const
+{
+    // FreeType derives its linear advance from the 16.16 scale factor it computed for the size, and
+    // that factor is truncated, so the advance comes back smaller than the design width. It is
+    // invisible once the advance is fitted to the pixel grid, but geometric precision keeps it, and
+    // then text that should land on an authored coordinate misses it by a fraction of 1/65536.
+    // The parent font is left at design unit scale, so HarfBuzz hands us the advance from hmtx
+    // (variations included) and we can scale it in floating point instead...
+    auto advance = hb_font_get_glyph_h_advance(hb_font_get_parent(m_font.get()), glyph);
+    return advance * size / m_unitsPerEm;
+}
+
 hb_position_t SkiaHarfBuzzFont::glyphWidth(hb_codepoint_t glyph)
 {
+    if (m_scaledFont.isLinearMetrics())
+        return skScalarToHarfBuzzPosition(linearWidthForGlyph(glyph, m_scaledFont.getSize()));
+
     SkScalar width = m_scaledFont.getWidth(glyph);
     if (!m_scaledFont.isSubpixel())
         width = SkScalarRoundToInt(width);
@@ -205,6 +221,16 @@ hb_position_t SkiaHarfBuzzFont::glyphWidth(hb_codepoint_t glyph)
 void SkiaHarfBuzzFont::glyphWidths(unsigned count, const hb_codepoint_t* glyphs, unsigned glyphStride, hb_position_t* advances, unsigned advanceStride)
 {
     WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN // Glib/Win port
+
+    if (m_scaledFont.isLinearMetrics()) {
+        hb_font_get_glyph_h_advances(hb_font_get_parent(m_font.get()), count, glyphs, glyphStride, advances, advanceStride);
+        float scale = m_scaledFont.getSize() / m_unitsPerEm;
+        for (unsigned i = 0; i < count; ++i) {
+            *advances = skScalarToHarfBuzzPosition(*advances * scale);
+            advances = reinterpret_cast<hb_position_t*>(reinterpret_cast<uint8_t*>(advances) + advanceStride);
+        }
+        return;
+    }
 
     Vector<SkGlyphID, 256> skGlyphs(count);
     for (unsigned i = 0; i < count; ++i) {

@@ -68,7 +68,6 @@ public:
     static void renderSubtreeToContext(GraphicsContext&, RenderElement&, const AffineTransform&);
     static void clipToImageBuffer(GraphicsContext&, const FloatRect& targetRect, const FloatSize& scale, RefPtr<ImageBuffer>&, bool safeToClear);
 
-    static float calculateScreenFontSizeScalingFactor(const RenderObject&);
     static AffineTransform calculateTransformationToOutermostCoordinateSystem(const RenderObject&);
 
     static IntRect calculateImageBufferRect(const FloatRect& targetRect, const AffineTransform& absoluteTransform)

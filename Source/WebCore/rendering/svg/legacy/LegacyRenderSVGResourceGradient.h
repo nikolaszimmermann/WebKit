@@ -39,7 +39,6 @@ struct GradientData {
         friend bool operator==(const Inputs&, const Inputs&) = default;
 
         std::optional<FloatRect> objectBoundingBox;
-        float textPaintingScale = 1;
     };
 
     bool invalidate(const Inputs& inputs)
@@ -92,7 +91,7 @@ protected:
 private:
     void element() const = delete;
 
-    GradientData::Inputs computeInputs(RenderElement&, OptionSet<RenderSVGResourceMode>);
+    GradientData::Inputs computeInputs(RenderElement&);
     GradientData* gradientDataForRenderer(RenderElement&, const Style::ComputedStyle&, OptionSet<RenderSVGResourceMode>);
 
     virtual SVGUnitTypes::SVGUnitType gradientUnits() const = 0;

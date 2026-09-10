@@ -88,6 +88,11 @@ float Font::platformWidthForGlyph(Glyph glyph) const
         return 0;
 
     const auto& font = m_platformData.skFont();
+    if (font.isLinearMetrics()) {
+        if (auto* harfBuzzFont = m_platformData.skiaHarfBuzzFont())
+            return harfBuzzFont->linearWidthForGlyph(glyph, m_platformData.size());
+    }
+
     SkScalar width = font.getWidth(glyph);
 
     if (!font.isSubpixel())
@@ -105,8 +110,12 @@ void Font::platformInit()
     SkFontMetrics metrics;
     font.getMetrics(&metrics);
 
-    auto ascent = SkScalarRoundToScalar(-metrics.fAscent);
-    auto descent = SkScalarRoundToScalar(metrics.fDescent);
+    auto ascent = -metrics.fAscent;
+    auto descent = metrics.fDescent;
+    if (!font.isLinearMetrics()) {
+        ascent = SkScalarRoundToScalar(ascent);
+        descent = SkScalarRoundToScalar(descent);
+    }
     m_fontMetrics.setAscent(ascent);
     m_fontMetrics.setDescent(descent);
 

@@ -6,12 +6,12 @@ layer at (0,0) size 800x600
 layer at (0,0) size 500x200
   RenderSVGRoot {svg} at (0,13) size 402x187
     RenderSVGContainer {g} at (0,13) size 402x100
-      RenderSVGText {text} at (0,14) size 193x45 contains 1 chunk(s)
+      RenderSVGText {text} at (0,14) size 194x45 contains 1 chunk(s)
         RenderSVGInlineText {#text} at (0,0) size 102x45
-          chunk 1 text run 1 at (0.00,50.00) startOffset 0 endOffset 5 width 101.33: "PASS "
-        RenderSVGTSpan {tspan} at (101,0) size 92x45
+          chunk 1 text run 1 at (0.00,50.00) startOffset 0 endOffset 5 width 101.95: "PASS "
+        RenderSVGTSpan {tspan} at (101,0) size 93x45
           RenderSVGInlineText {#text} at (101,0) size 92x45
-            chunk 1 text run 1 at (101.33,50.00) startOffset 0 endOffset 4 width 91.33: "PASS"
+            chunk 1 text run 1 at (101.95,50.00) startOffset 0 endOffset 4 width 91.95: "PASS"
         RenderSVGInlineText {#text} at (0,0) size 0x0
       RenderSVGForeignObject {foreignObject} at (210,13) size 100x100
         RenderBlock {P} at (0,0) size 100x47 [color=#008800]
@@ -20,14 +20,14 @@ layer at (0,0) size 500x200
       RenderSVGViewportContainer {svg} at (310,14) size 92x45
         RenderSVGText {text} at (0,1) size 92x45 contains 1 chunk(s)
           RenderSVGInlineText {#text} at (0,0) size 92x45
-            chunk 1 text run 1 at (0.00,37.00) startOffset 0 endOffset 4 width 91.33: "PASS"
+            chunk 1 text run 1 at (0.00,37.00) startOffset 0 endOffset 4 width 91.95: "PASS"
     RenderSVGContainer {g} at (0,63) size 402x100
-      RenderSVGText {text} at (0,64) size 193x45 contains 1 chunk(s)
+      RenderSVGText {text} at (0,64) size 194x45 contains 1 chunk(s)
         RenderSVGInlineText {#text} at (0,0) size 102x45
-          chunk 1 text run 1 at (0.00,100.00) startOffset 0 endOffset 5 width 101.33: "PASS "
-        RenderSVGTSpan {tspan} at (101,0) size 92x45
+          chunk 1 text run 1 at (0.00,100.00) startOffset 0 endOffset 5 width 101.95: "PASS "
+        RenderSVGTSpan {tspan} at (101,0) size 93x45
           RenderSVGInlineText {#text} at (101,0) size 92x45
-            chunk 1 text run 1 at (101.33,100.00) startOffset 0 endOffset 4 width 91.33: "PASS"
+            chunk 1 text run 1 at (101.95,100.00) startOffset 0 endOffset 4 width 91.95: "PASS"
         RenderSVGInlineText {#text} at (0,0) size 0x0
       RenderSVGForeignObject {foreignObject} at (210,63) size 100x100
         RenderBlock {P} at (0,0) size 100x47 [color=#008800]
@@ -36,14 +36,14 @@ layer at (0,0) size 500x200
       RenderSVGViewportContainer {svg} at (310,64) size 92x45
         RenderSVGText {text} at (0,1) size 92x45 contains 1 chunk(s)
           RenderSVGInlineText {#text} at (0,0) size 92x45
-            chunk 1 text run 1 at (0.00,37.00) startOffset 0 endOffset 4 width 91.33: "PASS"
+            chunk 1 text run 1 at (0.00,37.00) startOffset 0 endOffset 4 width 91.95: "PASS"
     RenderSVGContainer {g} at (0,113) size 402x87
-      RenderSVGText {text} at (0,114) size 193x45 contains 1 chunk(s)
+      RenderSVGText {text} at (0,114) size 194x45 contains 1 chunk(s)
         RenderSVGInlineText {#text} at (0,0) size 102x45
-          chunk 1 text run 1 at (0.00,150.00) startOffset 0 endOffset 5 width 101.33: "PASS "
-        RenderSVGTSpan {tspan} at (101,0) size 92x45
+          chunk 1 text run 1 at (0.00,150.00) startOffset 0 endOffset 5 width 101.95: "PASS "
+        RenderSVGTSpan {tspan} at (101,0) size 93x45
           RenderSVGInlineText {#text} at (101,0) size 92x45
-            chunk 1 text run 1 at (101.33,150.00) startOffset 0 endOffset 4 width 91.33: "PASS"
+            chunk 1 text run 1 at (101.95,150.00) startOffset 0 endOffset 4 width 91.95: "PASS"
         RenderSVGInlineText {#text} at (0,0) size 0x0
       RenderSVGForeignObject {foreignObject} at (210,113) size 100x100
         RenderBlock {P} at (0,0) size 100x47 [color=#008800]
@@ -52,4 +52,4 @@ layer at (0,0) size 500x200
       RenderSVGViewportContainer {svg} at (310,114) size 92x45
         RenderSVGText {text} at (0,1) size 92x45 contains 1 chunk(s)
           RenderSVGInlineText {#text} at (0,0) size 92x45
-            chunk 1 text run 1 at (0.00,37.00) startOffset 0 endOffset 4 width 91.33: "PASS"
+            chunk 1 text run 1 at (0.00,37.00) startOffset 0 endOffset 4 width 91.95: "PASS"

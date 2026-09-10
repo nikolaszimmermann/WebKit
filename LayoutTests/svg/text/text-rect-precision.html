@@ -1,6 +1,11 @@
 <html xmlns="http://www.w3.org/1999/xhtml">
 <head>
     <script src="../../resources/js-test-pre.js"></script>
+    <style>
+        /* The test measures one character at a time and compares the total against the width of the
+           whole string, so it only holds for a font that does not kern. */
+        text { font-kerning: none; }
+    </style>
 </head>
 <body>
     <svg style="position: absolute; top: 10px; left: 10px; width: 500px; height: 300px;">

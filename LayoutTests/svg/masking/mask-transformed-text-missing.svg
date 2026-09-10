@@ -1,4 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="100px" height="100px">
+  <!-- Ahem reports whole-pixel ascent/descent (FontCoreText.cpp), which offsets the text bounding box
+       from the glyph outlines. On hidpi the mask clips the last device pixel row of the glyphs. -->
+  <meta name="fuzzy" content="maxDifference=0-255; totalPixels=0-40" />
   <defs xmlns="http://www.w3.org/2000/svg">
     <mask id="mask">
       <text fill="#fff" font-family="Ahem" font-size="12px" transform="rotate(90 50 50)" x="50%" y='50%'>foobar</text>

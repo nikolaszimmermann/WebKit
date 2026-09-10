@@ -1924,6 +1924,11 @@ webkit.org/b/204505 imported/w3c/web-platform-tests/css/css-multicol/multicol-ru
 # Antialiasing differences
 imported/w3c/web-platform-tests/css/css-masking/mask-image/mask-image-svg-child-will-change.html [ ImageOnlyFailure ]
 
+# Ahem reports whole-pixel ascent/descent, which offsets the text bounding box from the glyph
+# outlines, so on hidpi the mask clips the last device pixel row. Same content as the annotated
+# svg/masking/mask-transformed-text-missing.svg, which cannot be annotated here.
+webkit.org/b/323561 imported/w3c/web-platform-tests/css/css-masking/mask-svg-content/mask-text-001.svg [ ImageOnlyFailure ]
+
 imported/w3c/web-platform-tests/css/css-masking/mask-image/mask-composite-1b.html [ ImageOnlyFailure ]
 imported/w3c/web-platform-tests/css/css-masking/mask-image/mask-composite-2b.html [ ImageOnlyFailure ]
 imported/w3c/web-platform-tests/css/css-masking/mask-image/mask-image-1a.html [ ImageOnlyFailure ]
