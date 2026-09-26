@@ -4178,6 +4178,12 @@ void LocalFrameView::addedOrRemovedScrollbar()
     InspectorInstrumentation::didAddOrRemoveScrollbars(*this);
 }
 
+void LocalFrameView::scrollbarModesDidChange()
+{
+    if (renderView())
+        setNeedsCompositingGeometryUpdate();
+}
+
 OptionSet<TiledBacking::Scrollability> LocalFrameView::computeScrollability() const
 {
     RefPtr page = m_frame->page();
