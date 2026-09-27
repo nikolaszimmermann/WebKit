@@ -181,16 +181,22 @@ void CoordinatedPlatformLayer::notifyCompositionRequired()
     m_client->notifyCompositionRequired();
 }
 
+auto CoordinatedPlatformLayer::makePositionUpdate(const FloatPoint& value) -> PositionUpdate
+{
+    assertIsHeld(m_lock);
+    return { value, ++m_lastPositionUpdateGeneration, isMainThread() };
+}
+
 void CoordinatedPlatformLayer::setPosition(FloatPoint&& position)
 {
     assertIsHeld(m_lock);
-    m_pendingState.position = WTF::move(position);
+    m_pendingState.position = makePositionUpdate(position);
 }
 
 void CoordinatedPlatformLayer::setPositionForScrolling(const FloatPoint& position)
 {
     Locker locker { m_lock };
-    m_pendingState.positionForScrolling = position;
+    m_pendingState.positionForScrolling = makePositionUpdate(position);
 }
 
 const FloatPoint& CoordinatedPlatformLayer::position() const
@@ -218,13 +224,13 @@ FloatPoint CoordinatedPlatformLayer::topLeftPositionForScrolling()
 void CoordinatedPlatformLayer::setBoundsOrigin(const FloatPoint& origin)
 {
     assertIsHeld(m_lock);
-    m_pendingState.boundsOrigin = origin;
+    m_pendingState.boundsOrigin = makePositionUpdate(origin);
 }
 
 void CoordinatedPlatformLayer::setBoundsOriginForScrolling(const FloatPoint& origin)
 {
     Locker locker { m_lock };
-    m_pendingState.boundsOriginForScrolling = origin;
+    m_pendingState.boundsOriginForScrolling = makePositionUpdate(origin);
 }
 
 const FloatPoint& CoordinatedPlatformLayer::boundsOrigin() const
@@ -1021,34 +1027,37 @@ void CoordinatedPlatformLayer::flushPendingState()
     if (!m_pendingState.position && !m_pendingState.boundsOrigin && !m_pendingState.positionForScrolling && !m_pendingState.boundsOriginForScrolling)
         return;
 
-    std::optional<FloatPoint> position;
-    if (m_pendingState.positionForScrolling) {
-        m_pendingState.position = std::nullopt;
-        position = *std::exchange(m_pendingState.positionForScrolling, std::nullopt);
-    } else if (m_pendingState.position)
-        position = *std::exchange(m_pendingState.position, std::nullopt);
+    // Positions set on the main thread belong to its current rendering update, so only the main thread takes them, and
+    // they are applied together with the rest of that rendering update. Positions set by the scrolling thread are
+    // applied with the next composition, no matter which thread takes them.
+    bool canTakePositionsForRenderingUpdate = isMainThread();
+    bool requiresComposition = false;
+    auto takeUpdate = [&](std::optional<PositionUpdate>& pendingUpdate, FloatPoint& value, uint64_t& generation, std::optional<PositionUpdate>& updateForRenderingUpdate, std::optional<PositionUpdate>& updateForScrolling) {
+        if (!pendingUpdate || (pendingUpdate->isForRenderingUpdate && !canTakePositionsForRenderingUpdate))
+            return;
 
-    std::optional<FloatPoint> boundsOrigin;
-    if (m_pendingState.boundsOriginForScrolling) {
-        m_pendingState.boundsOrigin = std::nullopt;
-        boundsOrigin = *std::exchange(m_pendingState.boundsOriginForScrolling, std::nullopt);
-    } else if (m_pendingState.boundsOrigin)
-        boundsOrigin = *std::exchange(m_pendingState.boundsOrigin, std::nullopt);
+        auto update = *std::exchange(pendingUpdate, std::nullopt);
+        if (update.generation <= generation)
+            return;
 
-    bool requireComposition = false;
-    if (position && m_position != *position) {
-        m_position = *position;
-        m_pendingChanges.add(Change::Position);
-        requireComposition = true;
-    }
+        // Replace a waiting update even when the value didn't change, so that an older position can't be applied after it.
+        generation = update.generation;
+        (update.isForRenderingUpdate ? updateForRenderingUpdate : updateForScrolling) = update;
+        if (value != update.value) {
+            value = update.value;
+            requiresComposition = true;
+        }
+    };
+    auto takeUpdates = [&](std::optional<PositionUpdate>& update, std::optional<PositionUpdate>& updateForScrolling, FloatPoint& value, uint64_t& generation, std::optional<PositionUpdate>& updateForRenderingUpdate, std::optional<PositionUpdate>& updateForScrollingComposition) {
+        // Take the older one first, so that the newer one ends up as the latest known value.
+        bool updateIsOlder = update && (!updateForScrolling || update->generation < updateForScrolling->generation);
+        takeUpdate(updateIsOlder ? update : updateForScrolling, value, generation, updateForRenderingUpdate, updateForScrollingComposition);
+        takeUpdate(updateIsOlder ? updateForScrolling : update, value, generation, updateForRenderingUpdate, updateForScrollingComposition);
+    };
 
-    if (boundsOrigin && m_boundsOrigin != boundsOrigin) {
-        m_boundsOrigin = *boundsOrigin;
-        m_pendingChanges.add(Change::BoundsOrigin);
-        requireComposition = true;
-    }
-
-    if (requireComposition)
+    takeUpdates(m_pendingState.position, m_pendingState.positionForScrolling, m_position, m_positionGeneration, m_positionUpdatesForRenderingUpdate.position, m_positionUpdatesForScrolling.position);
+    takeUpdates(m_pendingState.boundsOrigin, m_pendingState.boundsOriginForScrolling, m_boundsOrigin, m_boundsOriginGeneration, m_positionUpdatesForRenderingUpdate.boundsOrigin, m_positionUpdatesForScrolling.boundsOrigin);
+    if (requiresComposition)
         notifyCompositionRequired();
 }
 
@@ -1059,23 +1068,22 @@ void CoordinatedPlatformLayer::flushPositionChanges(const OptionSet<CompositionR
         return;
 
     Locker locker { m_lock };
-    if (!m_pendingChanges.containsAny({ Change::Position, Change::BoundsOrigin }))
-        return;
-
-    auto applyPositionChanges = [this](auto& layer) {
+    auto applyPositionUpdates = [this](PositionUpdates& positionUpdates) {
         assertIsHeld(m_lock);
-        if (m_pendingChanges.contains(Change::Position)) {
-            layer.setPosition(m_position);
-            m_pendingChanges.remove(Change::Position);
+        if (auto position = std::exchange(positionUpdates.position, std::nullopt); position && position->generation > m_appliedPositionGeneration) {
+            ensureTarget().setPosition(position->value);
+            m_appliedPositionGeneration = position->generation;
         }
 
-        if (m_pendingChanges.contains(Change::BoundsOrigin)) {
-            layer.setBoundsOrigin(m_boundsOrigin);
-            m_pendingChanges.remove(Change::BoundsOrigin);
+        if (auto boundsOrigin = std::exchange(positionUpdates.boundsOrigin, std::nullopt); boundsOrigin && boundsOrigin->generation > m_appliedBoundsOriginGeneration) {
+            ensureTarget().setBoundsOrigin(boundsOrigin->value);
+            m_appliedBoundsOriginGeneration = boundsOrigin->generation;
         }
     };
 
-    applyPositionChanges(ensureTarget());
+    if (reasons.contains(CompositionReason::RenderingUpdate))
+        applyPositionUpdates(m_positionUpdatesForRenderingUpdate);
+    applyPositionUpdates(m_positionUpdatesForScrolling);
 }
 
 void CoordinatedPlatformLayer::flushCompositingState(const OptionSet<CompositionReason>& reasons)

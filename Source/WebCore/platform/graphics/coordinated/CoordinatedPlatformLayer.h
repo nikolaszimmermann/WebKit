@@ -258,7 +258,6 @@ private:
         BackgroundColor,
         BackingStore,
         BlendMode,
-        BoundsOrigin,
         Children,
         ChildrenTransform,
         ClipPath,
@@ -280,7 +279,6 @@ private:
         Mask,
         MasksToBounds,
         Opacity,
-        Position,
         Preserves3D,
         Replica,
         Size,
@@ -379,12 +377,38 @@ private:
     Markable<ScrollingNodeID> m_scrollingNodeID WTF_GUARDED_BY_LOCK(m_lock);
 #endif
 
+    // Positions are set from the main thread and from the scrolling thread. Every position gets a generation when it's
+    // set, and an older position never replaces a newer one, no matter in which order the compositor receives them.
+    struct PositionUpdate {
+        FloatPoint value;
+        uint64_t generation { 0 };
+        // Positions set on the main thread belong to its current rendering update, the others don't.
+        bool isForRenderingUpdate { false };
+    };
+    PositionUpdate makePositionUpdate(const FloatPoint&) WTF_REQUIRES_LOCK(m_lock);
+    uint64_t m_lastPositionUpdateGeneration WTF_GUARDED_BY_LOCK(m_lock) { 0 };
+
     struct {
-        std::optional<FloatPoint> position;
-        std::optional<FloatPoint> positionForScrolling;
-        std::optional<FloatPoint> boundsOrigin;
-        std::optional<FloatPoint> boundsOriginForScrolling;
+        std::optional<PositionUpdate> position;
+        std::optional<PositionUpdate> positionForScrolling;
+        std::optional<PositionUpdate> boundsOrigin;
+        std::optional<PositionUpdate> boundsOriginForScrolling;
     } m_pendingState WTF_GUARDED_BY_LOCK(m_lock);
+    uint64_t m_positionGeneration WTF_GUARDED_BY_LOCK(m_lock) { 0 };
+    uint64_t m_boundsOriginGeneration WTF_GUARDED_BY_LOCK(m_lock) { 0 };
+
+    // Positions waiting for the compositor. The ones the main thread set during a rendering update are applied with it,
+    // the ones the scrolling thread set with the next composition.
+    struct PositionUpdates {
+        std::optional<PositionUpdate> position;
+        std::optional<PositionUpdate> boundsOrigin;
+    };
+    PositionUpdates m_positionUpdatesForRenderingUpdate WTF_GUARDED_BY_LOCK(m_lock);
+    PositionUpdates m_positionUpdatesForScrolling WTF_GUARDED_BY_LOCK(m_lock);
+
+    // Accessed only from the compositor thread.
+    uint64_t m_appliedPositionGeneration { 0 };
+    uint64_t m_appliedBoundsOriginGeneration { 0 };
 };
 
 } // namespace WebCore
