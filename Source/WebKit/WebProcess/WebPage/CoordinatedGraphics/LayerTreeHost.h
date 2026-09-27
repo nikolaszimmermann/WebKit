@@ -86,6 +86,7 @@ private:
     WebCore::FloatRect visibleContentsRect() const;
 
     void requestCompositionForRenderingUpdate();
+    void didCompleteRenderingUpdateForScrolling();
 
     // CoordinatedPlatformLayer::Client
     WebCore::SkiaPaintingEngine& paintingEngine() const LIFETIME_BOUND override { return *m_skiaPaintingEngine.get(); }

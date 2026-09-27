@@ -220,8 +220,16 @@ void LayerTreeHost::updateRendering()
         drawingArea->dispatchPendingCallbacksAfterEnsuringDrawing();
 
     bool didChangeSceneState = m_sceneState->flush();
-    if (m_compositionRequired || m_pendingResize || m_forceFrameSync || didChangeSceneState)
+    bool shouldRequestComposition = m_compositionRequired || m_pendingResize || m_forceFrameSync || didChangeSceneState;
+    if (shouldRequestComposition)
         requestCompositionForRenderingUpdate();
+
+    // The scrolling thread waits until the layer changes of this update reach the compositor before it moves layers on
+    // its own. With pipelined rendering updates the compositor is nearly always busy with the previous frame, so waiting
+    // for the next rendered frame would often be too late. Once no tiles are left to paint, the next frame the compositor
+    // starts is guaranteed to include this update, so report it now. Otherwise it is reported once the update is applied.
+    if (m_pipelinedRenderingUpdates && (!shouldRequestComposition || !m_sceneState->hasPendingTiles()))
+        didCompleteRenderingUpdateForScrolling();
 
     m_compositionRequired = false;
     m_pendingResize = false;
@@ -462,6 +470,9 @@ void LayerTreeHost::compositorProgressDidChange()
 
     WTFBeginSignpost(this, DidComposite);
 
+    if (m_pipelinedRenderingUpdates)
+        didCompleteRenderingUpdateForScrolling();
+
     if (!m_pendingForceRepaint && m_forcedRepaintAsyncCallback)
         m_forcedRepaintAsyncCallback();
 
@@ -476,6 +487,14 @@ void LayerTreeHost::compositorProgressDidChange()
         scheduleRenderingUpdateRunLoopObserver();
 
     WTFEndSignpost(this, DidComposite);
+}
+
+void LayerTreeHost::didCompleteRenderingUpdateForScrolling()
+{
+#if ENABLE(ASYNC_SCROLLING)
+    if (RefPtr scrollingCoordinator = protect(m_webPage)->corePage()->scrollingCoordinator())
+        scrollingCoordinator->didCompletePlatformRenderingUpdate();
+#endif
 }
 
 #if PLATFORM(GTK)
