@@ -108,7 +108,11 @@ LayerTreeHost::LayerTreeHost(WebPage& webPage)
         rootLayer.setSize(m_webPage->size());
     }
 
-    m_pipelinedRenderingUpdates = webPage.corePage()->settings().pipelinedRenderingUpdates();
+    // Running ahead needs the layer changes to be committed with the transaction, which only happens with Skia.
+#if !USE(TEXTURE_MAPPER)
+    m_pipelinedRenderingUpdatesRunAhead = webPage.corePage()->settings().pipelinedRenderingUpdatesRunAhead();
+#endif
+    m_pipelinedRenderingUpdates = m_pipelinedRenderingUpdatesRunAhead || webPage.corePage()->settings().pipelinedRenderingUpdates();
     m_compositor = ThreadedCompositor::create(webPage, *this, m_sceneState.get(), m_pipelinedRenderingUpdates);
 #if USE(TEXTURE_MAPPER)
     m_skiaPaintingEngine = SkiaPaintingEngine::create(nullptr);
@@ -183,6 +187,11 @@ void LayerTreeHost::updateRendering()
 
     SetForScope<bool> reentrancyProtector(m_isUpdatingRendering, true);
 
+    // The scrolling thread waits for the previous rendering update if it isn't reported as done yet, and then the main
+    // thread would wait for the scrolling thread when this one starts. The previous one is committed, so report it now.
+    if (std::exchange(m_renderingUpdateIDForScrolling, std::nullopt))
+        didCompleteRenderingUpdateForScrolling();
+
     TraceScope traceScope(LayerTreeHostRenderingUpdateStart, LayerTreeHostRenderingUpdateEnd);
 
     Ref page = m_webPage;
@@ -203,7 +212,7 @@ void LayerTreeHost::updateRendering()
     page->finalizeRenderingUpdate(flags);
 
     if (m_pendingResize) {
-        m_compositor->setSize(page->size(), page->deviceScaleFactor());
+        m_sceneState->setViewportSize(page->size(), page->deviceScaleFactor());
         auto& rootLayer = m_sceneState->rootLayer();
         Locker locker { rootLayer.lock() };
         rootLayer.setSize(page->size());
@@ -219,17 +228,22 @@ void LayerTreeHost::updateRendering()
     if (RefPtr drawingArea = page->drawingArea())
         drawingArea->dispatchPendingCallbacksAfterEnsuringDrawing();
 
-    bool didChangeSceneState = m_sceneState->flush();
-    bool shouldRequestComposition = m_compositionRequired || m_pendingResize || m_forceFrameSync || didChangeSceneState;
-    if (shouldRequestComposition)
-        requestCompositionForRenderingUpdate();
+    bool compositionRequired = m_compositionRequired || m_pendingResize || m_forceFrameSync;
+    auto renderingUpdateID = m_sceneState->flush(compositionRequired ? CoordinatedSceneState::ForceTransaction::Yes : CoordinatedSceneState::ForceTransaction::No);
+    if (renderingUpdateID)
+        requestCompositionForRenderingUpdate(*renderingUpdateID);
 
     // The scrolling thread waits until the layer changes of this update reach the compositor before it moves layers on
     // its own. With pipelined rendering updates the compositor is nearly always busy with the previous frame, so waiting
-    // for the next rendered frame would often be too late. Once no tiles are left to paint, the next frame the compositor
-    // starts is guaranteed to include this update, so report it now. Otherwise it is reported once the update is applied.
-    if (m_pipelinedRenderingUpdates && (!shouldRequestComposition || !m_sceneState->hasPendingTiles()))
-        didCompleteRenderingUpdateForScrolling();
+    // for the next rendered frame would often be too late. If this update is the only one waiting and no tiles are left
+    // to paint, the next frame the compositor starts is guaranteed to include it, so report it now. Otherwise it is
+    // reported once the update is applied.
+    if (m_pipelinedRenderingUpdates) {
+        if (!renderingUpdateID || m_sceneState->willApplyLastTransactionNext())
+            didCompleteRenderingUpdateForScrolling();
+        else
+            m_renderingUpdateIDForScrolling = renderingUpdateID;
+    }
 
     m_compositionRequired = false;
     m_pendingResize = false;
@@ -448,30 +462,43 @@ void LayerTreeHost::didRenderFrame()
     }
 }
 
-void LayerTreeHost::requestCompositionForRenderingUpdate()
+void LayerTreeHost::requestCompositionForRenderingUpdate(uint64_t renderingUpdateID)
 {
     // With pipelined rendering updates, the next one can start as soon as the compositor has applied this one.
     // A forced repaint still waits until the frame is painted.
     m_isWaitingForPaintedRenderingUpdate = !m_pipelinedRenderingUpdates || m_forcedRepaintAsyncCallback || m_pendingForceRepaint || m_waitUntilPaintingComplete;
 
-    m_isWaitingForRenderer = true;
-    m_compositor->requestCompositionForRenderingUpdate(++m_renderingUpdateID);
+    m_previousRenderingUpdateID = std::exchange(m_renderingUpdateID, renderingUpdateID);
+    m_compositor->requestCompositionForRenderingUpdate();
+    m_isWaitingForRenderer = !canStartNextRenderingUpdate();
     WTFEmitSignpost(this, RequestCompositionForRenderingUpdate);
+}
+
+bool LayerTreeHost::canStartNextRenderingUpdate() const
+{
+    if (m_isWaitingForPaintedRenderingUpdate)
+        return m_compositor->lastPaintedRenderingUpdateID() >= m_renderingUpdateID;
+
+    auto lastAppliedRenderingUpdateID = m_compositor->lastAppliedRenderingUpdateID();
+    if (lastAppliedRenderingUpdateID >= m_renderingUpdateID)
+        return true;
+
+    // When running ahead, the next rendering update can start while this one is still waiting to be applied, but
+    // never while the one before it is too.
+    return m_pipelinedRenderingUpdatesRunAhead && lastAppliedRenderingUpdateID >= m_previousRenderingUpdateID;
 }
 
 void LayerTreeHost::compositorProgressDidChange()
 {
-    if (!m_isWaitingForRenderer)
-        return;
+    if (m_renderingUpdateIDForScrolling && m_compositor->lastAppliedRenderingUpdateID() >= *m_renderingUpdateIDForScrolling) {
+        m_renderingUpdateIDForScrolling = std::nullopt;
+        didCompleteRenderingUpdateForScrolling();
+    }
 
-    auto lastRenderingUpdateID = m_isWaitingForPaintedRenderingUpdate ? m_compositor->lastPaintedRenderingUpdateID() : m_compositor->lastAppliedRenderingUpdateID();
-    if (lastRenderingUpdateID < m_renderingUpdateID)
+    if (!m_isWaitingForRenderer || !canStartNextRenderingUpdate())
         return;
 
     WTFBeginSignpost(this, DidComposite);
-
-    if (m_pipelinedRenderingUpdates)
-        didCompleteRenderingUpdateForScrolling();
 
     if (!m_pendingForceRepaint && m_forcedRepaintAsyncCallback)
         m_forcedRepaintAsyncCallback();

@@ -81,7 +81,7 @@ void CoordinatedSceneState::removeLayer(CoordinatedPlatformLayer& layer)
     m_didChangeLayers = true;
 }
 
-bool CoordinatedSceneState::flush()
+std::optional<uint64_t> CoordinatedSceneState::flush(ForceTransaction forceTransaction)
 {
     ASSERT(isMainRunLoop());
 
@@ -111,17 +111,28 @@ bool CoordinatedSceneState::flush()
     }
 #endif
 
+    transaction.viewportSize = std::exchange(m_viewportSize, std::nullopt);
+
     // Without the Skia compositor the layer changes aren't part of the transaction, but the compositor still has to wait
     // for the tiles painted during this rendering update.
-    if (!didChangeLayers && transaction.changedLayers.isEmpty() && !m_tileCounter->hasPendingTiles())
-        return false;
+    bool hasChanges = didChangeLayers || !transaction.changedLayers.isEmpty() || transaction.viewportSize || m_tileCounter->hasPendingTiles();
+    if (!hasChanges && forceTransaction == ForceTransaction::No)
+        return std::nullopt;
 
-    m_lastCommittedTileCounter = std::exchange(m_tileCounter, CoordinatedTileCounter::create(m_didPaintAllTilesTask.copyRef()));
-    transaction.tileCounter = m_lastCommittedTileCounter;
+    if (hasChanges) {
+        m_lastCommittedTileCounter = std::exchange(m_tileCounter, CoordinatedTileCounter::create(m_didPaintAllTilesTask.copyRef()));
+        transaction.tileCounter = m_lastCommittedTileCounter;
+    }
 
     Locker locker { m_transactionsLock };
     m_transactions.append(WTF::move(transaction));
-    return true;
+    return m_lastTransactionID;
+}
+
+void CoordinatedSceneState::setViewportSize(const IntSize& size, float deviceScaleFactor)
+{
+    ASSERT(isMainRunLoop());
+    m_viewportSize = ViewportSize { size, deviceScaleFactor };
 }
 
 void CoordinatedSceneState::flushPendingState()
@@ -154,7 +165,11 @@ void CoordinatedSceneState::applyTransaction(Transaction&& transaction)
 
 bool CoordinatedSceneState::firstTransactionHasPendingTiles() const
 {
-    return !m_transactions.isEmpty() && m_transactions.first().tileCounter->hasPendingTiles();
+    if (m_transactions.isEmpty())
+        return false;
+
+    auto& tileCounter = m_transactions.first().tileCounter;
+    return tileCounter && tileCounter->hasPendingTiles();
 }
 
 auto CoordinatedSceneState::takeFirstReadyTransaction() -> std::optional<Transaction>
@@ -166,16 +181,21 @@ auto CoordinatedSceneState::takeFirstReadyTransaction() -> std::optional<Transac
     return m_transactions.takeFirst();
 }
 
-auto CoordinatedSceneState::applyLayerState(const OptionSet<CompositionReason>& reasons, ApplyTransactions applyTransactions) -> LayersWithPendingTileUpdates
+auto CoordinatedSceneState::applyLayerState(const OptionSet<CompositionReason>& reasons, ApplyTransactions applyTransactions) -> AppliedLayerState
 {
     // Animations run on the compositor's own layers, so there is nothing to apply for them.
     if (reasons.hasExactlyOneBitSet() && reasons.contains(CompositionReason::Animation))
         return { };
 
+    AppliedLayerState state;
+
     // Rendering updates apply the transactions whose tiles are painted, and the other compositions only apply the
     // changes made off the main thread.
     if (reasons.contains(CompositionReason::RenderingUpdate)) {
         while (auto transaction = takeFirstReadyTransaction()) {
+            state.lastAppliedTransactionID = transaction->id;
+            if (transaction->viewportSize)
+                state.viewportSize = transaction->viewportSize;
             applyTransaction(WTF::move(*transaction));
             if (applyTransactions == ApplyTransactions::OldestReady)
                 break;
@@ -189,14 +209,13 @@ auto CoordinatedSceneState::applyLayerState(const OptionSet<CompositionReason>& 
             layer->flushPositionChanges(reasons);
     }
 
-    LayersWithPendingTileUpdates layersWithPendingTileUpdates;
     m_rootLayer->flushCompositingState(reasons);
     for (auto& layer : m_committedLayers) {
         layer->flushCompositingState(reasons);
         if (layer->hasPendingBackingStoreTileUpdates())
-            layersWithPendingTileUpdates.append(Ref { layer });
+            state.layersWithPendingTileUpdates.append(Ref { layer });
     }
-    return layersWithPendingTileUpdates;
+    return state;
 }
 
 void CoordinatedSceneState::processPendingTileUpdates(LayersWithPendingTileUpdates&& layers)
@@ -207,7 +226,7 @@ void CoordinatedSceneState::processPendingTileUpdates(LayersWithPendingTileUpdat
 
 void CoordinatedSceneState::flushCompositingState(const OptionSet<CompositionReason>& reasons)
 {
-    processPendingTileUpdates(applyLayerState(reasons, ApplyTransactions::AllReady));
+    processPendingTileUpdates(applyLayerState(reasons, ApplyTransactions::AllReady).layersWithPendingTileUpdates);
 }
 
 void CoordinatedSceneState::invalidateCommittedLayers()
@@ -280,6 +299,18 @@ bool CoordinatedSceneState::hasPendingTiles() const
 {
     Locker locker { m_transactionsLock };
     return firstTransactionHasPendingTiles();
+}
+
+bool CoordinatedSceneState::hasQueuedTransactions() const
+{
+    Locker locker { m_transactionsLock };
+    return !m_transactions.isEmpty();
+}
+
+bool CoordinatedSceneState::willApplyLastTransactionNext() const
+{
+    Locker locker { m_transactionsLock };
+    return m_transactions.size() == 1 && !firstTransactionHasPendingTiles();
 }
 
 } // namespace WebKit

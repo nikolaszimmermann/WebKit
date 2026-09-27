@@ -194,7 +194,7 @@ void LayerTreeHost::flushLayers()
         rootLayer.setSize(page->size());
     }
 
-    bool didChangeSceneState = m_sceneState->flush();
+    bool didChangeSceneState = m_sceneState->flush().has_value();
     if (m_compositionRequired || m_pendingResize || m_forceFrameSync || didChangeSceneState)
         commitSceneState();
 

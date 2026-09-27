@@ -28,6 +28,7 @@
 #if USE(COORDINATED_GRAPHICS)
 #include <WebCore/CoordinatedCompositionReason.h>
 #include <WebCore/CoordinatedTileCounter.h>
+#include <WebCore/IntSize.h>
 #include <atomic>
 #include <wtf/Deque.h>
 #include <wtf/HashSet.h>
@@ -56,13 +57,27 @@ public:
     void addLayer(WebCore::CoordinatedPlatformLayer&);
     void removeLayer(WebCore::CoordinatedPlatformLayer&);
 
-    bool flush();
+    // Queues a transaction with the changes of this rendering update and returns its ID. Without changes, a transaction
+    // is only queued when forced, so that the compositor can still tell when it applied this rendering update.
+    enum class ForceTransaction : bool { No, Yes };
+    std::optional<uint64_t> flush(ForceTransaction = ForceTransaction::No);
     void flushPendingState();
+
+    struct ViewportSize {
+        WebCore::IntSize size;
+        float deviceScaleFactor { 1 };
+    };
+    void setViewportSize(const WebCore::IntSize&, float deviceScaleFactor);
 
     // Applying only the oldest transaction per composition shows every rendering update.
     enum class ApplyTransactions : bool { OldestReady, AllReady };
     using LayersWithPendingTileUpdates = Vector<Ref<WebCore::CoordinatedPlatformLayer>, 16>;
-    LayersWithPendingTileUpdates applyLayerState(const OptionSet<WebCore::CompositionReason>&, ApplyTransactions);
+    struct AppliedLayerState {
+        std::optional<uint64_t> lastAppliedTransactionID;
+        std::optional<ViewportSize> viewportSize;
+        LayersWithPendingTileUpdates layersWithPendingTileUpdates;
+    };
+    AppliedLayerState applyLayerState(const OptionSet<WebCore::CompositionReason>&, ApplyTransactions);
     void processPendingTileUpdates(LayersWithPendingTileUpdates&&);
     // Applies all the transactions that are ready.
     void flushCompositingState(const OptionSet<WebCore::CompositionReason>&);
@@ -78,6 +93,9 @@ public:
     Ref<WebCore::CoordinatedTileCounter> willPaintTile();
     bool hasPendingTiles() const;
 
+    bool hasQueuedTransactions() const;
+    bool willApplyLastTransactionNext() const;
+
 private:
     CoordinatedSceneState();
 
@@ -85,10 +103,12 @@ private:
     // compositor applies it once all the tiles painted for it are done.
     struct Transaction {
         uint64_t id { 0 };
+        // Null for a transaction without changes.
         RefPtr<WebCore::CoordinatedTileCounter> tileCounter;
         std::optional<HashSet<Ref<WebCore::CoordinatedPlatformLayer>>> layers;
         HashSet<Ref<WebCore::CoordinatedPlatformLayer>> layersToRemove;
         Vector<Ref<WebCore::CoordinatedPlatformLayer>> changedLayers;
+        std::optional<ViewportSize> viewportSize;
     };
     bool firstTransactionHasPendingTiles() const WTF_REQUIRES_LOCK(m_transactionsLock);
     std::optional<Transaction> takeFirstReadyTransaction();
@@ -104,6 +124,7 @@ private:
     Lock m_stateLock;
 
     uint64_t m_lastTransactionID { 0 };
+    std::optional<ViewportSize> m_viewportSize;
     mutable Lock m_transactionsLock;
     Deque<Transaction> m_transactions WTF_GUARDED_BY_LOCK(m_transactionsLock);
 

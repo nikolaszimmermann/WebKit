@@ -85,7 +85,8 @@ private:
     void updateRootLayer();
     WebCore::FloatRect visibleContentsRect() const;
 
-    void requestCompositionForRenderingUpdate();
+    void requestCompositionForRenderingUpdate(uint64_t renderingUpdateID);
+    bool canStartNextRenderingUpdate() const;
     void didCompleteRenderingUpdateForScrolling();
 
     // CoordinatedPlatformLayer::Client
@@ -147,8 +148,11 @@ private:
     bool m_isWaitingForRenderer { false };
     bool m_scheduledWhileWaitingForRenderer { false };
     uint64_t m_renderingUpdateID { 0 };
+    uint64_t m_previousRenderingUpdateID { 0 };
     bool m_pipelinedRenderingUpdates { false };
+    bool m_pipelinedRenderingUpdatesRunAhead { false };
     bool m_isWaitingForPaintedRenderingUpdate { true };
+    std::optional<uint64_t> m_renderingUpdateIDForScrolling;
     bool m_forceFrameSync { false };
     bool m_compositionRequired { false };
 #if ENABLE(SCROLLING_THREAD)

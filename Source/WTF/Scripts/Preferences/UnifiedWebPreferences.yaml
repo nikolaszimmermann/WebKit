@@ -4727,6 +4727,15 @@ PipelinedRenderingUpdates:
   condition: USE(COORDINATED_GRAPHICS)
   defaultValue: false
 
+PipelinedRenderingUpdatesRunAhead:
+  type: bool
+  status: unstable
+  category: dom
+  humanReadableName: "Pipelined rendering updates: run ahead"
+  humanReadableDescription: "Start the next rendering update while the compositor hasn't applied the previous one yet, so tile painting and the wait for the previous frame overlap with it too"
+  condition: USE(COORDINATED_GRAPHICS)
+  defaultValue: false
+
 PitchCorrectionAlgorithm:
   type: uint32_t
   refinedType: WebCore::MediaPlayerEnums::PitchCorrectionAlgorithm

@@ -324,13 +324,6 @@ void ThreadedCompositor::pendingTilesDidChange()
     scheduleUpdateLocked();
 }
 
-void ThreadedCompositor::setSize(const IntSize& size, float deviceScaleFactor)
-{
-    ASSERT(RunLoop::isMain());
-    Locker locker { m_attributes.lock };
-    updateSceneAttributes(size, deviceScaleFactor);
-}
-
 #if ENABLE(DAMAGE_TRACKING)
 void ThreadedCompositor::setDamagePropagationSettings(std::optional<OptionSet<DamagePropagationFlags>> flags, unsigned rectangleThreshold)
 {
@@ -579,7 +572,6 @@ void ThreadedCompositor::renderLayerTree()
         return;
 
     OptionSet<CompositionReason> reasons;
-    std::optional<uint64_t> renderingUpdateID;
     {
         Locker locker { m_state.lock };
 
@@ -596,8 +588,7 @@ void ThreadedCompositor::renderLayerTree()
             if (m_state.isWaitingForTiles) {
                 reasons.remove(CompositionReason::RenderingUpdate);
                 m_state.reasons.add(CompositionReason::RenderingUpdate);
-            } else
-                renderingUpdateID = m_state.renderingUpdateID;
+            }
         }
 
         ASSERT(m_state.state == State::Scheduled);
@@ -609,20 +600,37 @@ void ThreadedCompositor::renderLayerTree()
         return;
 #endif
 
-    // Retrieve the scene attributes in a thread-safe manner.
-    IntSize viewportSize;
-    float deviceScaleFactor;
-    {
-        Locker locker { m_attributes.lock };
-        viewportSize = m_attributes.viewportSize;
-        deviceScaleFactor = m_attributes.deviceScaleFactor;
+    WTFBeginSignpost(this, FlushCompositingState);
+    auto appliedLayerState = m_sceneState->applyLayerState(reasons, CoordinatedSceneState::ApplyTransactions::OldestReady);
+    WTFEndSignpost(this, FlushCompositingState);
+
+    auto renderingUpdateID = appliedLayerState.lastAppliedTransactionID;
+    if (renderingUpdateID) {
+        WTFEmitSignpost(this, DidApplyRenderingUpdate);
+
+        // The viewport size changes together with the layers of the same rendering update.
+        if (auto& viewportSize = appliedLayerState.viewportSize)
+            updateSceneAttributes(viewportSize->size, viewportSize->deviceScaleFactor);
+
+        // From here on the compositor only reads its own layer tree, so the main thread may change the layers again.
+        m_lastAppliedRenderingUpdateID.store(*renderingUpdateID);
+        if (m_reportsAppliedRenderingUpdates)
+            m_didCompositeRunLoopObserver->schedule(&RunLoop::mainSingleton());
     }
 
+    // Only one rendering update is applied per frame, so that every one of them is shown, and one whose tiles are still
+    // being painted can't be applied at all. If more are waiting, composite the next one after this frame.
+    if (reasons.contains(CompositionReason::RenderingUpdate) && m_sceneState->hasQueuedTransactions()) {
+        Locker locker { m_state.lock };
+        requestCompositionForRenderingUpdateLocked();
+    }
+
+    auto viewportSize = m_attributes.viewportSize;
     if (viewportSize.isEmpty())
         return;
 
     TransformationMatrix viewportTransform;
-    viewportTransform.scale(deviceScaleFactor);
+    viewportTransform.scale(m_attributes.deviceScaleFactor);
 
     m_surface->willRenderFrame(viewportSize);
 
@@ -631,17 +639,9 @@ void ThreadedCompositor::renderLayerTree()
             m_layerTreeHost->willRenderFrame();
     });
 
-    WTFBeginSignpost(this, FlushCompositingState);
-    auto layersWithPendingTileUpdates = m_sceneState->applyLayerState(reasons, CoordinatedSceneState::ApplyTransactions::OldestReady);
-    if (renderingUpdateID) {
-        WTFEmitSignpost(this, DidApplyRenderingUpdate);
-        // From here on the compositor only reads its own layer tree, so the main thread may change the layers again.
-        m_lastAppliedRenderingUpdateID.store(*renderingUpdateID);
-        if (m_reportsAppliedRenderingUpdates)
-            m_didCompositeRunLoopObserver->schedule(&RunLoop::mainSingleton());
-    }
-    m_sceneState->processPendingTileUpdates(WTF::move(layersWithPendingTileUpdates));
-    WTFEndSignpost(this, FlushCompositingState);
+    WTFBeginSignpost(this, ProcessPendingTileUpdates);
+    m_sceneState->processPendingTileUpdates(WTF::move(appliedLayerState.layersWithPendingTileUpdates));
+    WTFEndSignpost(this, ProcessPendingTileUpdates);
 
     WTFBeginSignpost(this, PaintToGLContext);
     const auto targetContents = paintToCurrentGLContext(viewportTransform, viewportSize, reasons);
@@ -676,13 +676,17 @@ void ThreadedCompositor::renderLayerTree()
     });
 }
 
-void ThreadedCompositor::requestCompositionForRenderingUpdate(uint64_t renderingUpdateID)
+void ThreadedCompositor::requestCompositionForRenderingUpdate()
 {
     ASSERT(RunLoop::isMain());
     Locker locker { m_state.lock };
+    requestCompositionForRenderingUpdateLocked();
+}
+
+void ThreadedCompositor::requestCompositionForRenderingUpdateLocked()
+{
+    assertIsHeld(m_state.lock);
     m_state.reasons.add(CompositionReason::RenderingUpdate);
-    ASSERT(renderingUpdateID > m_state.renderingUpdateID);
-    m_state.renderingUpdateID = renderingUpdateID;
     if (m_sceneState->hasPendingTiles())
         m_state.isWaitingForTiles = true;
     scheduleUpdateLocked();

@@ -91,8 +91,7 @@ public:
     void preferredBufferFormatsDidChange();
 #endif
 
-    void setSize(const WebCore::IntSize&, float);
-    void requestCompositionForRenderingUpdate(uint64_t renderingUpdateID);
+    void requestCompositionForRenderingUpdate();
     uint64_t lastAppliedRenderingUpdateID() const { return m_lastAppliedRenderingUpdateID.load(); }
     uint64_t lastPaintedRenderingUpdateID() const { return m_lastPaintedRenderingUpdateID.load(); }
     void waitUntilRenderingUpdateIsPainted(uint64_t renderingUpdateID);
@@ -133,6 +132,7 @@ private:
     bool isOnlyRenderingUpdatePendingAndWaitingForTiles() const;
 
     void scheduleUpdateLocked();
+    void requestCompositionForRenderingUpdateLocked();
 
     // Lets the painting threads notify the compositor without keeping it alive, until invalidate() is called.
     class DidPaintAllTilesTask;
@@ -192,7 +192,6 @@ private:
         bool isRenderTimerActive WTF_GUARDED_BY_LOCK(lock) { false };
         bool isWaitingForTiles WTF_GUARDED_BY_LOCK(lock) { false };
         OptionSet<WebCore::CompositionReason> reasons WTF_GUARDED_BY_LOCK(lock);
-        uint64_t renderingUpdateID WTF_GUARDED_BY_LOCK(lock) { 0 };
     } m_state;
 
     const bool m_reportsAppliedRenderingUpdates;
@@ -203,8 +202,8 @@ private:
     Condition m_paintedRenderingUpdateCondition;
     std::atomic<bool> m_isWaitingForPaintedRenderingUpdate { false };
 
+    // Only accessed from the compositor thread after creation.
     struct {
-        Lock lock;
         WebCore::IntSize viewportSize;
         float deviceScaleFactor { 1 };
     } m_attributes;
