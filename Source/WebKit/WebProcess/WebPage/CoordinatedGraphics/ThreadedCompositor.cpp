@@ -284,6 +284,7 @@ void ThreadedCompositor::pendingTilesDidChange()
         return;
 
     m_state.isWaitingForTiles = false;
+    WTFEmitSignpost(this, TilesReady);
     scheduleUpdateLocked();
 }
 
@@ -612,6 +613,9 @@ void ThreadedCompositor::renderLayerTree()
     WTFBeginSignpost(this, FlushCompositingState);
     flushCompositingState(reasons);
     WTFEndSignpost(this, FlushCompositingState);
+
+    if (reasons.contains(CompositionReason::RenderingUpdate))
+        WTFEmitSignpost(this, DidApplyRenderingUpdate);
 
     WTFBeginSignpost(this, PaintToGLContext);
     const auto targetContents = paintToCurrentGLContext(viewportTransform, viewportSize, reasons);
