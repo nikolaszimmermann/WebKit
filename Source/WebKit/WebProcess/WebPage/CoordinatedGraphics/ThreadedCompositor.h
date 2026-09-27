@@ -128,7 +128,6 @@ private:
     bool isOnlyRenderingUpdatePendingAndWaitingForTiles() const;
 
     void scheduleUpdateLocked();
-    void flushCompositingState(const OptionSet<WebCore::CompositionReason>&);
     void renderLayerTree();
     TargetContents paintToCurrentGLContext(const WebCore::TransformationMatrix&, const WebCore::IntSize&, const OptionSet<WebCore::CompositionReason>&);
 #if USE(TEXTURE_MAPPER)

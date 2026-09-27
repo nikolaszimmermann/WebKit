@@ -29,6 +29,7 @@
 #include <WebCore/CoordinatedCompositionReason.h>
 #include <atomic>
 #include <wtf/HashSet.h>
+#include <wtf/Vector.h>
 #include <wtf/Lock.h>
 #include <wtf/ThreadSafeRefCounted.h>
 
@@ -55,6 +56,10 @@ public:
 
     bool flush();
     void flushPendingState();
+
+    using LayersWithPendingTileUpdates = Vector<Ref<WebCore::CoordinatedPlatformLayer>, 16>;
+    LayersWithPendingTileUpdates applyLayerState(const OptionSet<WebCore::CompositionReason>&);
+    void processPendingTileUpdates(LayersWithPendingTileUpdates&&);
     void flushCompositingState(const OptionSet<WebCore::CompositionReason>&);
     void invalidate();
 

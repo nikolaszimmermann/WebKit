@@ -125,8 +125,12 @@ void CoordinatedSceneState::commitPendingLayers()
         m_committedLayers = WTF::move(m_pendingLayers);
 }
 
-void CoordinatedSceneState::flushCompositingState(const OptionSet<CompositionReason>& reasons)
+auto CoordinatedSceneState::applyLayerState(const OptionSet<CompositionReason>& reasons) -> LayersWithPendingTileUpdates
 {
+    // Animations run on the compositor's own layers, so there is nothing to apply for them.
+    if (reasons.hasExactlyOneBitSet() && reasons.contains(CompositionReason::Animation))
+        return { };
+
     commitPendingLayers();
 
     {
@@ -136,16 +140,25 @@ void CoordinatedSceneState::flushCompositingState(const OptionSet<CompositionRea
             layer->flushPositionChanges(reasons);
     }
 
-    Vector<Ref<CoordinatedPlatformLayer>, 16> layersWithPendingTileUpdates;
+    LayersWithPendingTileUpdates layersWithPendingTileUpdates;
     m_rootLayer->flushCompositingState(reasons);
     for (auto& layer : m_committedLayers) {
         layer->flushCompositingState(reasons);
         if (layer->hasPendingBackingStoreTileUpdates())
             layersWithPendingTileUpdates.append(Ref { layer });
     }
+    return layersWithPendingTileUpdates;
+}
 
-    for (auto& layer : layersWithPendingTileUpdates)
+void CoordinatedSceneState::processPendingTileUpdates(LayersWithPendingTileUpdates&& layers)
+{
+    for (auto& layer : layers)
         layer->processPendingBackingStoreTileUpdates();
+}
+
+void CoordinatedSceneState::flushCompositingState(const OptionSet<CompositionReason>& reasons)
+{
+    processPendingTileUpdates(applyLayerState(reasons));
 }
 
 void CoordinatedSceneState::invalidateCommittedLayers()

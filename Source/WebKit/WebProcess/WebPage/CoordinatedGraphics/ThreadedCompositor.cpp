@@ -165,7 +165,7 @@ void ThreadedCompositor::invalidate()
 #endif
 
         // Update the scene at this point ensures the layers state are correctly propagated.
-        flushCompositingState(CompositionReason::RenderingUpdate);
+        m_sceneState->flushCompositingState(CompositionReason::RenderingUpdate);
 
         m_sceneState->invalidateCommittedLayers();
 #if USE(TEXTURE_MAPPER)
@@ -336,21 +336,6 @@ void ThreadedCompositor::enableFrameDamageNotificationForTesting()
     m_damage.shouldNotifyFrameDamageForTesting = true;
 }
 #endif
-
-void ThreadedCompositor::flushCompositingState(const OptionSet<CompositionReason>& reasons)
-{
-    if (reasons.hasExactlyOneBitSet() && reasons.contains(CompositionReason::Animation))
-        return;
-
-#if ASSERT_ENABLED
-    {
-        Locker locker { m_state.lock };
-        ASSERT(!reasons.contains(CompositionReason::RenderingUpdate) || !m_state.isWaitingForTiles);
-    }
-#endif
-
-    m_sceneState->flushCompositingState(reasons);
-}
 
 TargetContents ThreadedCompositor::paintToCurrentGLContext(const TransformationMatrix& matrix, const IntSize& size, const OptionSet<CompositionReason>& reasons)
 {
@@ -611,11 +596,11 @@ void ThreadedCompositor::renderLayerTree()
     });
 
     WTFBeginSignpost(this, FlushCompositingState);
-    flushCompositingState(reasons);
-    WTFEndSignpost(this, FlushCompositingState);
-
+    auto layersWithPendingTileUpdates = m_sceneState->applyLayerState(reasons);
     if (reasons.contains(CompositionReason::RenderingUpdate))
         WTFEmitSignpost(this, DidApplyRenderingUpdate);
+    m_sceneState->processPendingTileUpdates(WTF::move(layersWithPendingTileUpdates));
+    WTFEndSignpost(this, FlushCompositingState);
 
     WTFBeginSignpost(this, PaintToGLContext);
     const auto targetContents = paintToCurrentGLContext(viewportTransform, viewportSize, reasons);
