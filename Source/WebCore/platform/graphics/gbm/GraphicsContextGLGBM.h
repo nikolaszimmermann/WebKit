@@ -72,6 +72,8 @@ private:
         EGLImageKHR image { nullptr };
     };
     DrawingBuffer createDrawingBuffer() const;
+    void destroyDrawingBuffer(DrawingBuffer&);
+    DrawingBuffer takeReleasedDisplayBuffer();
 
     struct {
         uint32_t fourcc { 0 };
@@ -80,6 +82,10 @@ private:
 
     DrawingBuffer m_drawingBuffer;
     DrawingBuffer m_displayBuffer;
+    // Buffers displayed before m_displayBuffer, oldest first. The compositor may still paint from them. Two of them are
+    // enough while the main thread runs at most one rendering update ahead of the compositor.
+    static constexpr size_t maximumPreviousDisplayBuffers = 2;
+    Vector<DrawingBuffer, maximumPreviousDisplayBuffers + 1> m_previousDisplayBuffers;
 };
 
 } // namespace WebCore

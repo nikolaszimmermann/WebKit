@@ -161,24 +161,65 @@ GraphicsContextGLGBM::DrawingBuffer GraphicsContextGLGBM::createDrawingBuffer() 
     return { WTF::move(dmaBuf), image };
 }
 
+void GraphicsContextGLGBM::destroyDrawingBuffer(DrawingBuffer& buffer)
+{
+    if (!buffer.image)
+        return;
+
+    EGL_DestroyImageKHR(m_displayObj, buffer.image);
+    buffer.image = nullptr;
+    buffer.dmabuf = nullptr;
+}
+
 void GraphicsContextGLGBM::freeDrawingBuffers()
 {
-    auto destroyBuffer = [this](DrawingBuffer& buffer) {
-        if (!buffer.image)
-            return;
+    destroyDrawingBuffer(m_drawingBuffer);
+    destroyDrawingBuffer(m_displayBuffer);
+    for (auto& buffer : m_previousDisplayBuffers)
+        destroyDrawingBuffer(buffer);
+    m_previousDisplayBuffers.clear();
+}
 
-        EGL_DestroyImageKHR(m_displayObj, buffer.image);
-        buffer.image = nullptr;
-        buffer.dmabuf = nullptr;
-    };
-    destroyBuffer(m_drawingBuffer);
-    destroyBuffer(m_displayBuffer);
+GraphicsContextGLGBM::DrawingBuffer GraphicsContextGLGBM::takeReleasedDisplayBuffer()
+{
+    // In the WebProcess the compositor holds a reference to the DMABufBuffer for as long as it may paint from it, and it
+    // lets go only once it shows a newer buffer, so a buffer holding the only reference can be drawn into again. In the
+    // GPU process the compositor only gets the ID of the buffer, so there is no way to tell, and the previous buffers
+    // are always kept.
+    if (m_layerContentsDisplayDelegate) {
+        // Draw into the oldest released buffer, and free the other released ones.
+        DrawingBuffer releasedBuffer;
+        m_previousDisplayBuffers.removeAllMatching([&](DrawingBuffer& buffer) {
+            if (!buffer.dmabuf->hasOneRef())
+                return false;
+            if (!releasedBuffer.dmabuf)
+                releasedBuffer = std::exchange(buffer, { });
+            else
+                destroyDrawingBuffer(buffer);
+            return true;
+        });
+        if (releasedBuffer.dmabuf)
+            return releasedBuffer;
+    }
+
+    // If the compositor still holds all of them, reuse the oldest.
+    if (m_previousDisplayBuffers.size() <= maximumPreviousDisplayBuffers)
+        return { };
+
+    auto buffer = std::exchange(m_previousDisplayBuffers.first(), { });
+    m_previousDisplayBuffers.removeAt(0);
+    return buffer;
 }
 
 bool GraphicsContextGLGBM::bindNextDrawingBuffer()
 {
-    std::swap(m_drawingBuffer, m_displayBuffer);
+    // The buffer that was drawn becomes the display buffer. JavaScript may start drawing again before the compositor
+    // shows it, so the next drawing buffer can't be the buffer that is on screen now.
+    if (m_displayBuffer.dmabuf)
+        m_previousDisplayBuffers.append(std::exchange(m_displayBuffer, { }));
+    m_displayBuffer = std::exchange(m_drawingBuffer, { });
 
+    m_drawingBuffer = takeReleasedDisplayBuffer();
     if (!m_drawingBuffer.dmabuf) {
         auto buffer = createDrawingBuffer();
         if (!buffer.dmabuf)
