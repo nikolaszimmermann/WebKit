@@ -32,6 +32,7 @@
 #include "ThreadedCompositorPlayStation.h"
 #include <WebCore/CoordinatedImageBackingStore.h>
 #include <WebCore/CoordinatedPlatformLayer.h>
+#include <WebCore/CoordinatedTileCounter.h>
 #include <WebCore/FloatPoint.h>
 #include <WebCore/GraphicsLayerClient.h>
 #include <WebCore/GraphicsLayerFactory.h>
@@ -154,8 +155,13 @@ private:
     void requestComposition(WebCore::CompositionReason) override;
     RunLoop* compositingRunLoop() const override;
     int maxTextureSize() const override;
-    void willPaintTile() override { };
-    void didPaintTile() override { };
+    Ref<WebCore::CoordinatedTileCounter> willPaintTile() override
+    {
+        // The compositor doesn't wait for tiles here, so every tile gets a counter of its own.
+        auto tileCounter = WebCore::CoordinatedTileCounter::create(nullptr);
+        tileCounter->willPaintTile();
+        return tileCounter;
+    }
 
     // GraphicsLayerFactory
     Ref<WebCore::GraphicsLayer> createGraphicsLayer(WebCore::GraphicsLayer::Type, WebCore::GraphicsLayerClient&) override;

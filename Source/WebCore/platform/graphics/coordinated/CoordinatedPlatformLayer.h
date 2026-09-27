@@ -55,6 +55,7 @@ class CoordinatedImageBackingStore;
 class CoordinatedPlatformLayer;
 class CoordinatedPlatformLayerBuffer;
 class CoordinatedTileBuffer;
+class CoordinatedTileCounter;
 class GraphicsLayerCoordinated;
 class NativeImage;
 
@@ -91,8 +92,7 @@ public:
         virtual void requestComposition(CompositionReason) = 0;
         virtual RunLoop* compositingRunLoop() const = 0;
         virtual int maxTextureSize() const = 0;
-        virtual void willPaintTile() = 0;
-        virtual void didPaintTile() = 0;
+        virtual Ref<CoordinatedTileCounter> willPaintTile() = 0;
     };
 
     static Ref<CoordinatedPlatformLayer> create();
@@ -223,8 +223,7 @@ public:
     RunLoop* compositingRunLoop() const;
     int maxTextureSize() const;
 
-    void willPaintTile();
-    void didPaintTile();
+    Ref<CoordinatedTileCounter> willPaintTile();
     void waitUntilPaintingComplete();
 
 private:

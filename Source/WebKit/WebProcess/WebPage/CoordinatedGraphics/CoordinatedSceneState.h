@@ -27,6 +27,7 @@
 
 #if USE(COORDINATED_GRAPHICS)
 #include <WebCore/CoordinatedCompositionReason.h>
+#include <WebCore/CoordinatedTileCounter.h>
 #include <atomic>
 #include <wtf/HashSet.h>
 #include <wtf/Vector.h>
@@ -69,9 +70,9 @@ public:
 
     void waitUntilPaintingComplete();
 
-    void willPaintTile();
-    void didPaintTile();
-    unsigned pendingTiles() const { return m_pendingTiles.load(); }
+    void setDidPaintAllTilesTask(Ref<WebCore::CoordinatedTileCounter::DidPaintAllTilesTask>&&);
+    Ref<WebCore::CoordinatedTileCounter> willPaintTile();
+    bool hasPendingTiles() const;
 
 private:
     CoordinatedSceneState();
@@ -87,8 +88,14 @@ private:
     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_pendingLayersToRemove WTF_GUARDED_BY_LOCK(m_pendingLayersLock);
     std::atomic<bool> m_didChangeLayers { false };
     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_committedLayers;
-    std::atomic<unsigned> m_pendingTiles { 0 };
     Lock m_stateLock;
+
+    // Tiles are counted per rendering update. m_tileCounter belongs to the update being built on the main
+    // thread, and flush() turns it into m_committedTileCounter, which the compositor waits for.
+    RefPtr<WebCore::CoordinatedTileCounter::DidPaintAllTilesTask> m_didPaintAllTilesTask;
+    Ref<WebCore::CoordinatedTileCounter> m_tileCounter;
+    mutable Lock m_committedTileCounterLock;
+    RefPtr<WebCore::CoordinatedTileCounter> m_committedTileCounter WTF_GUARDED_BY_LOCK(m_committedTileCounterLock);
 };
 
 } // namespace WebKit

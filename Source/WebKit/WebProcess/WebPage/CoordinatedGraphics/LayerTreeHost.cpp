@@ -399,15 +399,9 @@ int LayerTreeHost::maxTextureSize() const
     return m_compositor->maxTextureSize();
 }
 
-void LayerTreeHost::willPaintTile()
+Ref<CoordinatedTileCounter> LayerTreeHost::willPaintTile()
 {
-    m_sceneState->willPaintTile();
-}
-
-void LayerTreeHost::didPaintTile()
-{
-    m_sceneState->didPaintTile();
-    m_compositor->pendingTilesDidChange();
+    return m_sceneState->willPaintTile();
 }
 
 Ref<CoordinatedImageBackingStore> LayerTreeHost::imageBackingStore(Ref<NativeImage>&& nativeImage)

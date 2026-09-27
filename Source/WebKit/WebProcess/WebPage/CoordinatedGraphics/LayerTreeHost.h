@@ -97,8 +97,7 @@ private:
     void requestComposition(WebCore::CompositionReason) override;
     RunLoop* compositingRunLoop() const override;
     int maxTextureSize() const override;
-    void willPaintTile() override;
-    void didPaintTile() override;
+    Ref<WebCore::CoordinatedTileCounter> willPaintTile() override;
 
     // GraphicsLayerFactory
     Ref<WebCore::GraphicsLayer> createGraphicsLayer(WebCore::GraphicsLayer::Type, WebCore::GraphicsLayerClient&) override;

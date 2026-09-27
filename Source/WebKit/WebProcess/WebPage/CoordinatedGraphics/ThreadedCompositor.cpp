@@ -73,6 +73,37 @@ using namespace WebCore;
 
 WTF_MAKE_TZONE_ALLOCATED_IMPL(ThreadedCompositor);
 
+class ThreadedCompositor::DidPaintAllTilesTask final : public CoordinatedTileCounter::DidPaintAllTilesTask {
+    WTF_MAKE_TZONE_ALLOCATED_INLINE(DidPaintAllTilesTask);
+public:
+    static Ref<DidPaintAllTilesTask> create(ThreadedCompositor& compositor)
+    {
+        return adoptRef(*new DidPaintAllTilesTask(compositor));
+    }
+
+    void run() final
+    {
+        Locker locker { m_lock };
+        if (m_compositor)
+            m_compositor->pendingTilesDidChange();
+    }
+
+    void invalidate()
+    {
+        Locker locker { m_lock };
+        m_compositor = nullptr;
+    }
+
+private:
+    explicit DidPaintAllTilesTask(ThreadedCompositor& compositor)
+        : m_compositor(&compositor)
+    {
+    }
+
+    Lock m_lock;
+    CheckedPtr<ThreadedCompositor> m_compositor WTF_GUARDED_BY_LOCK(m_lock);
+};
+
 Ref<ThreadedCompositor> ThreadedCompositor::create(WebPage& webPage, LayerTreeHost& layerTreeHost, CoordinatedSceneState& sceneState)
 {
     return adoptRef(*new ThreadedCompositor(webPage, layerTreeHost, sceneState));
@@ -87,8 +118,11 @@ ThreadedCompositor::ThreadedCompositor(WebPage& webPage, LayerTreeHost& layerTre
     , m_flipY(!m_surface->shouldPaintMirrored())
 #endif
     , m_renderTimer(m_workQueue->runLoop(), "ThreadedCompositor::RenderTimer"_s, this, &ThreadedCompositor::renderLayerTree)
+    , m_didPaintAllTilesTask(DidPaintAllTilesTask::create(*this))
 {
     ASSERT(RunLoop::isMain());
+
+    sceneState.setDidPaintAllTilesTask(m_didPaintAllTilesTask.copyRef());
 
     m_didCompositeRunLoopObserver = makeUnique<RunLoopObserver>(RunLoopObserver::WellKnownOrder::GraphicsCommit, [this] {
         this->didCompositeRunLoopObserverFired();
@@ -149,6 +183,8 @@ uint64_t ThreadedCompositor::surfaceID() const
 void ThreadedCompositor::invalidate()
 {
     ASSERT(RunLoop::isMain());
+
+    m_didPaintAllTilesTask->invalidate();
 
     {
         Locker locker { m_state.lock };
@@ -280,7 +316,7 @@ void ThreadedCompositor::pendingTilesDidChange()
     if (!m_state.isWaitingForTiles)
         return;
 
-    if (m_sceneState->pendingTiles())
+    if (m_sceneState->hasPendingTiles())
         return;
 
     m_state.isWaitingForTiles = false;
@@ -636,7 +672,7 @@ void ThreadedCompositor::requestCompositionForRenderingUpdate(Function<void()>&&
     m_state.reasons.add(CompositionReason::RenderingUpdate);
     ASSERT(!m_state.didCompositeRenderingUpdateFunction);
     m_state.didCompositeRenderingUpdateFunction = WTF::move(didCompositeFunction);
-    if (m_sceneState->pendingTiles())
+    if (m_sceneState->hasPendingTiles())
         m_state.isWaitingForTiles = true;
     scheduleUpdateLocked();
 }

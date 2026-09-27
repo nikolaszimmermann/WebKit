@@ -38,6 +38,7 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(CoordinatedSceneState);
 
 CoordinatedSceneState::CoordinatedSceneState()
     : m_rootLayer(CoordinatedPlatformLayer::create())
+    , m_tileCounter(CoordinatedTileCounter::create(nullptr))
 {
     ASSERT(isMainRunLoop());
 }
@@ -100,6 +101,11 @@ bool CoordinatedSceneState::flush()
     }
 
     flushPendingState();
+
+    {
+        Locker locker { m_committedTileCounterLock };
+        m_committedTileCounter = std::exchange(m_tileCounter, CoordinatedTileCounter::create(m_didPaintAllTilesTask.copyRef()));
+    }
 
     return didChangeLayers;
 }
@@ -197,15 +203,25 @@ void CoordinatedSceneState::waitUntilPaintingComplete()
         layer->waitUntilPaintingComplete();
 }
 
-void CoordinatedSceneState::willPaintTile()
+void CoordinatedSceneState::setDidPaintAllTilesTask(Ref<CoordinatedTileCounter::DidPaintAllTilesTask>&& task)
 {
-    m_pendingTiles++;
+    ASSERT(isMainRunLoop());
+    ASSERT(!m_tileCounter->hasPendingTiles());
+    m_didPaintAllTilesTask = WTF::move(task);
+    m_tileCounter = CoordinatedTileCounter::create(m_didPaintAllTilesTask.copyRef());
 }
 
-void CoordinatedSceneState::didPaintTile()
+Ref<CoordinatedTileCounter> CoordinatedSceneState::willPaintTile()
 {
-    ASSERT(m_pendingTiles.load() > 0);
-    m_pendingTiles--;
+    ASSERT(isMainRunLoop());
+    m_tileCounter->willPaintTile();
+    return m_tileCounter;
+}
+
+bool CoordinatedSceneState::hasPendingTiles() const
+{
+    Locker locker { m_committedTileCounterLock };
+    return m_committedTileCounter && m_committedTileCounter->hasPendingTiles();
 }
 
 } // namespace WebKit

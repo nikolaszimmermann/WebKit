@@ -31,6 +31,7 @@
 #include "CoordinatedBackingStoreProxy.h"
 #include "CoordinatedPlatformLayer.h"
 #include "CoordinatedTileBuffer.h"
+#include "CoordinatedTileCounter.h"
 #include "FontRenderOptions.h"
 #include "GLContext.h"
 #include "GraphicsContextSkia.h"
@@ -250,8 +251,7 @@ Ref<SkiaRecordingResult> SkiaPaintingEngine::record(const GraphicsLayerCoordinat
 Ref<CoordinatedTileBuffer> SkiaPaintingEngine::replay(const GraphicsLayerCoordinated& layer, Ref<SkiaRecordingResult>&& recording, const IntRect& tileRect, const IntRect& dirtyRect)
 {
     // ### Asynchronous rendering on worker threads ###
-    Ref platformLayer = layer.coordinatedPlatformLayer();
-    platformLayer->willPaintTile();
+    Ref tileCounter = layer.coordinatedPlatformLayer().willPaintTile();
 
     auto renderingMode = recording->renderingMode();
 #if USE(TEXTURE_MAPPER)
@@ -262,7 +262,7 @@ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::replay(const GraphicsLayerCoordin
     auto buffer = createBuffer(renderingMode, bufferSize, recording->contentsOpaque());
     buffer->beginPainting();
 
-    m_paintingWorkerPool->postTask([platformLayer = WTF::move(platformLayer), buffer = Ref { buffer }, tileRect, dirtyRect, recording = WTF::move(recording), threadSafeGrContext = m_threadSafeGrContext]() mutable {
+    m_paintingWorkerPool->postTask([tileCounter = WTF::move(tileCounter), buffer = Ref { buffer }, tileRect, dirtyRect, recording = WTF::move(recording), threadSafeGrContext = m_threadSafeGrContext]() mutable {
         if (auto* canvas = buffer->canvas()) {
             auto replayPicture = [](const sk_sp<SkPicture>& picture, SkCanvas* canvas, const IntRect& recordRect, const IntRect& tileRect, const IntRect& dirtyRect, bool isDDLBuffer) {
                 canvas->save();
@@ -298,7 +298,7 @@ Ref<CoordinatedTileBuffer> SkiaPaintingEngine::replay(const GraphicsLayerCoordin
         }
 
         buffer->completePainting();
-        platformLayer->didPaintTile();
+        tileCounter->didPaintTile();
     });
 
     return buffer;

@@ -34,6 +34,7 @@
 #include "CoordinatedPlatformLayerBufferHolePunch.h"
 #include "CoordinatedPlatformLayerBufferVideo.h"
 #include "CoordinatedTileBuffer.h"
+#include "CoordinatedTileCounter.h"
 #include "GraphicsContext.h"
 #include "GraphicsLayerCoordinated.h"
 #include "NativeImage.h"
@@ -1000,18 +1001,11 @@ int CoordinatedPlatformLayer::maxTextureSize() const
     return m_client ? m_client->maxTextureSize() : 0;
 }
 
-void CoordinatedPlatformLayer::willPaintTile()
+Ref<CoordinatedTileCounter> CoordinatedPlatformLayer::willPaintTile()
 {
     ASSERT(isMainThread());
     ASSERT(m_client);
-    m_client->willPaintTile();
-}
-
-void CoordinatedPlatformLayer::didPaintTile()
-{
-    // Could be called from painting threads.
-    if (m_client)
-        m_client->didPaintTile();
+    return m_client->willPaintTile();
 }
 
 void CoordinatedPlatformLayer::waitUntilPaintingComplete()

@@ -87,7 +87,6 @@ public:
 #if PLATFORM(WPE) && ENABLE(WPE_PLATFORM) && (USE(GBM) || OS(ANDROID))
     void preferredBufferFormatsDidChange();
 #endif
-    void pendingTilesDidChange();
 
     void setSize(const WebCore::IntSize&, float);
     void requestCompositionForRenderingUpdate(Function<void()>&&);
@@ -128,6 +127,10 @@ private:
     bool isOnlyRenderingUpdatePendingAndWaitingForTiles() const;
 
     void scheduleUpdateLocked();
+
+    // Lets the painting threads notify the compositor without keeping it alive, until invalidate() is called.
+    class DidPaintAllTilesTask;
+    void pendingTilesDidChange();
     void renderLayerTree();
     TargetContents paintToCurrentGLContext(const WebCore::TransformationMatrix&, const WebCore::IntSize&, const OptionSet<WebCore::CompositionReason>&);
 #if USE(TEXTURE_MAPPER)
@@ -228,6 +231,7 @@ private:
 #endif
 
     std::unique_ptr<WebCore::RunLoopObserver> m_didCompositeRunLoopObserver;
+    const Ref<DidPaintAllTilesTask> m_didPaintAllTilesTask;
 };
 
 } // namespace WebKit
