@@ -42,6 +42,7 @@ WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_BEGIN
 WTF_IGNORE_WARNINGS_IN_THIRD_PARTY_CODE_END
 #include <wtf/Atomics.h>
 #include <wtf/CheckedPtr.h>
+#include <wtf/Condition.h>
 #include <wtf/Noncopyable.h>
 #include <wtf/OptionSet.h>
 #include <wtf/TZoneMalloc.h>
@@ -77,7 +78,9 @@ class ThreadedCompositor : public ThreadSafeRefCountedAndCanMakeThreadSafeWeakPt
     WTF_MAKE_NONCOPYABLE(ThreadedCompositor);
     WTF_OVERRIDE_DELETE_FOR_CHECKED_PTR(ThreadedCompositor);
 public:
-    static Ref<ThreadedCompositor> create(WebPage&, LayerTreeHost&, CoordinatedSceneState&);
+    // The LayerTreeHost is always told when a rendering update is painted, and with reportsAppliedRenderingUpdates
+    // also when it is applied.
+    static Ref<ThreadedCompositor> create(WebPage&, LayerTreeHost&, CoordinatedSceneState&, bool reportsAppliedRenderingUpdates);
     virtual ~ThreadedCompositor();
 
     uint64_t surfaceID() const;
@@ -90,7 +93,9 @@ public:
 
     void setSize(const WebCore::IntSize&, float);
     void requestCompositionForRenderingUpdate(uint64_t renderingUpdateID);
+    uint64_t lastAppliedRenderingUpdateID() const { return m_lastAppliedRenderingUpdateID.load(); }
     uint64_t lastPaintedRenderingUpdateID() const { return m_lastPaintedRenderingUpdateID.load(); }
+    void waitUntilRenderingUpdateIsPainted(uint64_t renderingUpdateID);
     void requestComposition(WebCore::CompositionReason);
     RunLoop* runLoop();
 
@@ -120,7 +125,7 @@ public:
 #endif
 
 private:
-    ThreadedCompositor(WebPage&, LayerTreeHost&, CoordinatedSceneState&);
+    ThreadedCompositor(WebPage&, LayerTreeHost&, CoordinatedSceneState&, bool reportsAppliedRenderingUpdates);
 
     void startRenderTimer();
     void stopRenderTimer();
@@ -190,7 +195,13 @@ private:
         uint64_t renderingUpdateID WTF_GUARDED_BY_LOCK(lock) { 0 };
     } m_state;
 
+    const bool m_reportsAppliedRenderingUpdates;
+    std::atomic<uint64_t> m_lastAppliedRenderingUpdateID { 0 };
     std::atomic<uint64_t> m_lastPaintedRenderingUpdateID { 0 };
+    // Only tests wait for a rendering update to be painted, so the condition is only notified while one waits.
+    Lock m_paintedRenderingUpdateLock;
+    Condition m_paintedRenderingUpdateCondition;
+    std::atomic<bool> m_isWaitingForPaintedRenderingUpdate { false };
 
     struct {
         Lock lock;

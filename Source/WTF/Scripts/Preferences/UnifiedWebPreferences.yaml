@@ -4718,6 +4718,15 @@ PictureInPicturePlaybackStateEnabled:
     WebCore: false
   disableInLockdownMode: true
 
+PipelinedRenderingUpdates:
+  type: bool
+  status: unstable
+  category: dom
+  humanReadableName: "Pipelined rendering updates"
+  humanReadableDescription: "Start the next rendering update once the compositor has applied the previous one, without waiting until it is painted"
+  condition: USE(COORDINATED_GRAPHICS)
+  defaultValue: false
+
 PitchCorrectionAlgorithm:
   type: uint32_t
   refinedType: WebCore::MediaPlayerEnums::PitchCorrectionAlgorithm

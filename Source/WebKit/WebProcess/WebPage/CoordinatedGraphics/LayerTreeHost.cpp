@@ -108,7 +108,8 @@ LayerTreeHost::LayerTreeHost(WebPage& webPage)
         rootLayer.setSize(m_webPage->size());
     }
 
-    m_compositor = ThreadedCompositor::create(webPage, *this, m_sceneState.get());
+    m_pipelinedRenderingUpdates = webPage.corePage()->settings().pipelinedRenderingUpdates();
+    m_compositor = ThreadedCompositor::create(webPage, *this, m_sceneState.get(), m_pipelinedRenderingUpdates);
 #if USE(TEXTURE_MAPPER)
     m_skiaPaintingEngine = SkiaPaintingEngine::create(nullptr);
 #else
@@ -441,6 +442,10 @@ void LayerTreeHost::didRenderFrame()
 
 void LayerTreeHost::requestCompositionForRenderingUpdate()
 {
+    // With pipelined rendering updates, the next one can start as soon as the compositor has applied this one.
+    // A forced repaint still waits until the frame is painted.
+    m_isWaitingForPaintedRenderingUpdate = !m_pipelinedRenderingUpdates || m_forcedRepaintAsyncCallback || m_pendingForceRepaint || m_waitUntilPaintingComplete;
+
     m_isWaitingForRenderer = true;
     m_compositor->requestCompositionForRenderingUpdate(++m_renderingUpdateID);
     WTFEmitSignpost(this, RequestCompositionForRenderingUpdate);
@@ -448,7 +453,11 @@ void LayerTreeHost::requestCompositionForRenderingUpdate()
 
 void LayerTreeHost::compositorProgressDidChange()
 {
-    if (!m_isWaitingForRenderer || m_compositor->lastPaintedRenderingUpdateID() < m_renderingUpdateID)
+    if (!m_isWaitingForRenderer)
+        return;
+
+    auto lastRenderingUpdateID = m_isWaitingForPaintedRenderingUpdate ? m_compositor->lastPaintedRenderingUpdateID() : m_compositor->lastAppliedRenderingUpdateID();
+    if (lastRenderingUpdateID < m_renderingUpdateID)
         return;
 
     WTFBeginSignpost(this, DidComposite);
@@ -591,6 +600,10 @@ void LayerTreeHost::resetDamageHistoryForTesting()
 
 void LayerTreeHost::foreachRegionInDamageHistoryForTesting(Function<void(const Region&)>&& callback) const
 {
+    // Frame damage is recorded while painting. With pipelined rendering updates the rendering updates committed so far
+    // may not be painted yet, so wait for them to have their damage in the history.
+    m_compositor->waitUntilRenderingUpdateIsPainted(m_renderingUpdateID);
+
     Locker locker { m_frameDamageHistoryForTestingLock };
     for (const auto& region : m_frameDamageHistoryForTesting)
         callback(region);

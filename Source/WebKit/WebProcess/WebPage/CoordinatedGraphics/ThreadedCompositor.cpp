@@ -104,12 +104,12 @@ private:
     CheckedPtr<ThreadedCompositor> m_compositor WTF_GUARDED_BY_LOCK(m_lock);
 };
 
-Ref<ThreadedCompositor> ThreadedCompositor::create(WebPage& webPage, LayerTreeHost& layerTreeHost, CoordinatedSceneState& sceneState)
+Ref<ThreadedCompositor> ThreadedCompositor::create(WebPage& webPage, LayerTreeHost& layerTreeHost, CoordinatedSceneState& sceneState, bool reportsAppliedRenderingUpdates)
 {
-    return adoptRef(*new ThreadedCompositor(webPage, layerTreeHost, sceneState));
+    return adoptRef(*new ThreadedCompositor(webPage, layerTreeHost, sceneState, reportsAppliedRenderingUpdates));
 }
 
-ThreadedCompositor::ThreadedCompositor(WebPage& webPage, LayerTreeHost& layerTreeHost, CoordinatedSceneState& sceneState)
+ThreadedCompositor::ThreadedCompositor(WebPage& webPage, LayerTreeHost& layerTreeHost, CoordinatedSceneState& sceneState, bool reportsAppliedRenderingUpdates)
     : m_workQueue(WorkQueue::create("org.webkit.ThreadedCompositor"_s))
     , m_layerTreeHost(&layerTreeHost)
     , m_surface(AcceleratedSurface::create(webPage, [this] { frameComplete(); }, AcceleratedSurface::RenderingPurpose::Composited))
@@ -117,6 +117,7 @@ ThreadedCompositor::ThreadedCompositor(WebPage& webPage, LayerTreeHost& layerTre
 #if USE(TEXTURE_MAPPER)
     , m_flipY(!m_surface->shouldPaintMirrored())
 #endif
+    , m_reportsAppliedRenderingUpdates(reportsAppliedRenderingUpdates)
     , m_renderTimer(m_workQueue->runLoop(), "ThreadedCompositor::RenderTimer"_s, this, &ThreadedCompositor::renderLayerTree)
     , m_didPaintAllTilesTask(DidPaintAllTilesTask::create(*this))
 {
@@ -632,8 +633,13 @@ void ThreadedCompositor::renderLayerTree()
 
     WTFBeginSignpost(this, FlushCompositingState);
     auto layersWithPendingTileUpdates = m_sceneState->applyLayerState(reasons);
-    if (reasons.contains(CompositionReason::RenderingUpdate))
+    if (renderingUpdateID) {
         WTFEmitSignpost(this, DidApplyRenderingUpdate);
+        // From here on the compositor only reads its own layer tree, so the main thread may change the layers again.
+        m_lastAppliedRenderingUpdateID.store(*renderingUpdateID);
+        if (m_reportsAppliedRenderingUpdates)
+            m_didCompositeRunLoopObserver->schedule(&RunLoop::mainSingleton());
+    }
     m_sceneState->processPendingTileUpdates(WTF::move(layersWithPendingTileUpdates));
     WTFEndSignpost(this, FlushCompositingState);
 
@@ -645,6 +651,10 @@ void ThreadedCompositor::renderLayerTree()
 
     if (renderingUpdateID) {
         m_lastPaintedRenderingUpdateID.store(*renderingUpdateID);
+        if (m_isWaitingForPaintedRenderingUpdate.load()) {
+            Locker locker { m_paintedRenderingUpdateLock };
+            m_paintedRenderingUpdateCondition.notifyAll();
+        }
         m_didCompositeRunLoopObserver->schedule(&RunLoop::mainSingleton());
     }
 
@@ -683,6 +693,18 @@ void ThreadedCompositor::requestComposition(CompositionReason reason)
     Locker locker { m_state.lock };
     m_state.reasons.add(reason);
     scheduleUpdateLocked();
+}
+
+void ThreadedCompositor::waitUntilRenderingUpdateIsPainted(uint64_t renderingUpdateID)
+{
+    ASSERT(RunLoop::isMain());
+    // Only used for testing. Give up after a while, in case the compositor is suspended.
+    Locker locker { m_paintedRenderingUpdateLock };
+    m_isWaitingForPaintedRenderingUpdate = true;
+    m_paintedRenderingUpdateCondition.waitFor(m_paintedRenderingUpdateLock, 1_s, [&] {
+        return m_lastPaintedRenderingUpdateID.load() >= renderingUpdateID;
+    });
+    m_isWaitingForPaintedRenderingUpdate = false;
 }
 
 ASCIILiteral ThreadedCompositor::stateToString(ThreadedCompositor::State state)
