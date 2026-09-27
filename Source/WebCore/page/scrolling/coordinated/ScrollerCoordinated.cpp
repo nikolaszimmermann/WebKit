@@ -98,7 +98,7 @@ void ScrollerCoordinated::updateValues()
     if (!scrollerImp) {
         // Custom scrollbars are painted by RenderScrollbar
         Locker layerLocker { hostLayer->lock() };
-        hostLayer->setContentsBuffer(nullptr);
+        hostLayer->setAsyncContentsBuffer(nullptr);
         return;
     }
 
@@ -198,9 +198,10 @@ void ScrollerCoordinated::updateValues()
 #endif
 
     Locker layerLocker { hostLayer->lock() };
-    hostLayer->setContentsRect(state.frameRect);
-    hostLayer->setContentsClippingRect(FloatRoundedRect(state.frameRect));
-    hostLayer->setContentsBuffer(WTF::move(buffer));
+    // The scrollbar is painted from the main thread and from the scrolling thread. Both use the async contents, so that
+    // the most recent one always wins.
+    hostLayer->setAsyncContentsRects(state.frameRect, FloatRoundedRect(state.frameRect));
+    hostLayer->setAsyncContentsBuffer(WTF::move(buffer));
 }
 
 void ScrollerCoordinated::setHoveredAndPressedParts(ScrollbarPart hoveredPart, ScrollbarPart pressedPart)

@@ -80,7 +80,7 @@ void CoordinatedPlatformLayerBufferProxy::consumePendingBufferIfNeeded()
 
     if (RefPtr layer = m_layer) {
         assertIsHeld(layer->lock());
-        layer->setContentsBuffer(WTF::move(m_pendingBuffer));
+        layer->setAsyncContentsBuffer(WTF::move(m_pendingBuffer));
     } else
         m_pendingBuffer = nullptr;
 }
@@ -93,7 +93,7 @@ void CoordinatedPlatformLayerBufferProxy::setDisplayBuffer(std::unique_ptr<Coord
 
     {
         Locker layerLocker { layer->lock() };
-        layer->setContentsBuffer(WTF::move(buffer), std::nullopt, CoordinatedPlatformLayer::RequireComposition::No);
+        layer->setAsyncContentsBuffer(WTF::move(buffer), CoordinatedPlatformLayer::RequireComposition::No);
     }
     layer->requestComposition(CompositionReason::VideoFrame);
 }

@@ -466,6 +466,7 @@ void CoordinatedPlatformLayer::setContentsOpaque(bool contentsOpaque)
 void CoordinatedPlatformLayer::setContentsRect(const FloatRect& contentsRect)
 {
     assertIsHeld(m_lock);
+    assertCanChangeContentsForRenderingUpdate();
     if (m_contentsRect == contentsRect)
         return;
 
@@ -490,6 +491,7 @@ void CoordinatedPlatformLayer::setContentsRectClipsDescendants(bool contentsRect
 void CoordinatedPlatformLayer::setContentsClippingRect(const FloatRoundedRect& contentsClippingRect)
 {
     assertIsHeld(m_lock);
+    assertCanChangeContentsForRenderingUpdate();
     if (m_contentsClippingRect == contentsClippingRect)
         return;
 
@@ -532,8 +534,17 @@ float CoordinatedPlatformLayer::contentsScale() const
 void CoordinatedPlatformLayer::setContentsBuffer(std::unique_ptr<CoordinatedPlatformLayerBuffer>&& buffer, std::optional<Damage>&& dirtyRegion, RequireComposition requireComposition)
 {
     assertIsHeld(m_lock);
+    assertCanChangeContentsForRenderingUpdate();
+#if !USE(TEXTURE_MAPPER)
+    if (!buffer && !m_contentsBuffer.pending && !m_contentsBuffer.hasCommitted && !m_asyncState.contentsBuffer)
+        return;
+
+    // A video frame that is still waiting to be applied is older than this buffer, so it must not replace it.
+    dropAsyncContentsBuffer();
+#else
     if (!buffer && !m_contentsBuffer.pending && !m_contentsBuffer.hasCommitted)
         return;
+#endif
 
     m_contentsBuffer.pending = WTF::move(buffer);
     m_pendingChanges.add(Change::ContentsBuffer);
@@ -548,6 +559,61 @@ void CoordinatedPlatformLayer::setContentsBuffer(std::unique_ptr<CoordinatedPlat
     if (requireComposition == RequireComposition::Yes)
         notifyCompositionRequired();
 }
+
+#if USE(TEXTURE_MAPPER)
+void CoordinatedPlatformLayer::setAsyncContentsRects(const FloatRect& contentsRect, const FloatRoundedRect& contentsClippingRect)
+{
+    // The TextureMapper compositor already applies these with the next composition.
+    setContentsRect(contentsRect);
+    setContentsClippingRect(contentsClippingRect);
+}
+
+void CoordinatedPlatformLayer::setAsyncContentsBuffer(std::unique_ptr<CoordinatedPlatformLayerBuffer>&& buffer, RequireComposition requireComposition)
+{
+    setContentsBuffer(WTF::move(buffer), std::nullopt, requireComposition);
+}
+#else
+void CoordinatedPlatformLayer::setAsyncContentsRects(const FloatRect& contentsRect, const FloatRoundedRect& contentsClippingRect)
+{
+    assertIsHeld(m_lock);
+    if (m_asyncState.contentsRect == contentsRect && m_asyncState.contentsClippingRect == contentsClippingRect)
+        return;
+
+    if (m_asyncState.contentsRect != contentsRect) {
+        m_asyncState.contentsRect = contentsRect;
+        m_asyncState.changes.add(Change::ContentsRect);
+    }
+
+    if (m_asyncState.contentsClippingRect != contentsClippingRect) {
+        m_asyncState.contentsClippingRect = contentsClippingRect;
+        m_asyncState.changes.add(Change::ContentsClippingRect);
+    }
+
+    damageWholeLayerAsync();
+    notifyCompositionRequired();
+}
+
+void CoordinatedPlatformLayer::setAsyncContentsBuffer(std::unique_ptr<CoordinatedPlatformLayerBuffer>&& buffer, RequireComposition requireComposition)
+{
+    assertIsHeld(m_lock);
+    if (!buffer && !m_asyncState.contentsBuffer && !m_contentsBuffer.hasCommitted)
+        return;
+
+    m_asyncState.contentsBuffer = WTF::move(buffer);
+    m_asyncState.changes.add(Change::ContentsBuffer);
+    damageWholeLayerAsync();
+
+    if (requireComposition == RequireComposition::Yes)
+        notifyCompositionRequired();
+}
+
+void CoordinatedPlatformLayer::dropAsyncContentsBuffer()
+{
+    assertIsHeld(m_lock);
+    m_asyncState.contentsBuffer = nullptr;
+    m_asyncState.changes.remove(Change::ContentsBuffer);
+}
+#endif
 
 #if ENABLE(VIDEO) && USE(GSTREAMER_GL)
 void CoordinatedPlatformLayer::replaceCurrentContentsBufferWithCopy()
@@ -565,6 +631,8 @@ void CoordinatedPlatformLayer::replaceCurrentContentsBufferWithCopy()
     m_contentsBuffer.hasCommitted = !!m_contentsBuffer.committed;
     ensureTarget().setContentsLayer(m_contentsBuffer.committed.get());
 #else
+    dropAsyncContentsBuffer();
+
     if (!m_target)
         return;
 
@@ -647,15 +715,39 @@ void CoordinatedPlatformLayer::setDirtyRegion(Damage&& damage)
 #endif
 }
 
+void CoordinatedPlatformLayer::assertCanChangeContentsForRenderingUpdate() const
+{
+#if !USE(TEXTURE_MAPPER)
+    // Contents changed off the main thread must use the async setters.
+    ASSERT(isMainThread());
+#endif
+}
+
 #if ENABLE(DAMAGE_TRACKING)
+static void accumulateDamage(std::optional<Damage>& accumulatedDamage, Damage&& damage)
+{
+    if (!accumulatedDamage)
+        accumulatedDamage = WTF::move(damage);
+    else
+        accumulatedDamage->add(damage);
+}
+
 void CoordinatedPlatformLayer::addDamage(Damage&& damage)
 {
     assertIsHeld(m_lock);
-    if (!m_damage)
-        m_damage = WTF::move(damage);
-    else
-        m_damage->add(damage);
+    assertCanChangeContentsForRenderingUpdate();
+    accumulateDamage(m_damage, WTF::move(damage));
     m_pendingChanges.add(Change::Damage);
+}
+
+std::optional<Damage> CoordinatedPlatformLayer::wholeLayerDamage() const
+{
+    assertIsHeld(m_lock);
+    // An empty Damage rejects everything added to it later, so it must never become the layer's damage.
+    if (!m_damagePropagationEnabled || m_size.isEmpty())
+        return std::nullopt;
+
+    return Damage { m_size, Damage::Mode::Full };
 }
 #endif
 
@@ -663,13 +755,23 @@ void CoordinatedPlatformLayer::damageWholeLayer()
 {
 #if ENABLE(DAMAGE_TRACKING)
     assertIsHeld(m_lock);
-    // An empty Damage rejects everything added to it later, so it must never become the layer's damage.
-    if (!m_damagePropagationEnabled || m_size.isEmpty())
-        return;
-
-    addDamage(Damage { m_size, Damage::Mode::Full });
+    if (auto damage = wholeLayerDamage())
+        addDamage(WTF::move(*damage));
 #endif
 }
+
+#if !USE(TEXTURE_MAPPER)
+void CoordinatedPlatformLayer::damageWholeLayerAsync()
+{
+#if ENABLE(DAMAGE_TRACKING)
+    assertIsHeld(m_lock);
+    if (auto damage = wholeLayerDamage()) {
+        accumulateDamage(m_asyncState.damage, WTF::move(*damage));
+        m_asyncState.changes.add(Change::Damage);
+    }
+#endif
+}
+#endif
 
 void CoordinatedPlatformLayer::setFilters(const FilterOperations& filters)
 {
@@ -984,6 +1086,10 @@ void CoordinatedPlatformLayer::purgeBackingStores()
     m_imageBackingStore.current = nullptr;
     if (shouldReleaseBuffer(m_contentsBuffer.pending.get()))
         m_contentsBuffer.pending = nullptr;
+#if !USE(TEXTURE_MAPPER)
+    if (shouldReleaseBuffer(m_asyncState.contentsBuffer.get()))
+        m_asyncState.contentsBuffer = nullptr;
+#endif
 }
 
 bool CoordinatedPlatformLayer::isCompositionRequiredOrOngoing() const
@@ -1090,7 +1196,11 @@ void CoordinatedPlatformLayer::flushCompositingState(const OptionSet<Composition
 {
     ASSERT(!isMainThread());
     Locker locker { m_lock };
-    if (m_pendingChanges.isEmpty() && (!reasons.contains(CompositionReason::RenderingUpdate) || !m_backingStoreProxy))
+    bool hasChanges = !m_pendingChanges.isEmpty();
+#if !USE(TEXTURE_MAPPER)
+    hasChanges |= !m_asyncState.changes.isEmpty();
+#endif
+    if (!hasChanges && (!reasons.contains(CompositionReason::RenderingUpdate) || !m_backingStoreProxy))
         return;
 
     flushCompositingStateOnTarget(reasons, ensureTarget());
@@ -1309,7 +1419,7 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
 void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<CompositionReason>& reasons, SkiaCompositingLayer& layer)
 {
     assertIsHeld(m_lock);
-    if (reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::AsyncScrolling })) {
+    if (reasons.contains(CompositionReason::RenderingUpdate)) {
         if (m_pendingChanges.contains(Change::ContentsRect)) {
             layer.setContentsRect(m_contentsRect);
             m_pendingChanges.remove(Change::ContentsRect);
@@ -1503,9 +1613,7 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
 
         if (m_backingStoreProxy)
             layer.updateBackingStore(m_backingStoreProxy->takePendingUpdate(), m_contentsScale);
-    }
 
-    if (reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::AsyncScrolling })) {
 #if ENABLE(DAMAGE_TRACKING)
         if (m_pendingChanges.contains(Change::Damage)) {
             ASSERT(m_damage.has_value());
@@ -1513,10 +1621,32 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
             m_pendingChanges.remove(Change::Damage);
         }
 #endif
+
         if (m_pendingChanges.contains(Change::ContentsBuffer)) {
             m_contentsBuffer.hasCommitted = !!m_contentsBuffer.pending;
             layer.setContentsBuffer(WTF::move(m_contentsBuffer.pending));
             m_pendingChanges.remove(Change::ContentsBuffer);
+        }
+    }
+
+    if (reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::AsyncScrolling })) {
+        auto asyncChanges = std::exchange(m_asyncState.changes, { });
+        if (asyncChanges.contains(Change::ContentsRect))
+            layer.setContentsRect(m_asyncState.contentsRect);
+
+        if (asyncChanges.contains(Change::ContentsClippingRect))
+            layer.setContentsClippingRect(m_asyncState.contentsClippingRect);
+
+#if ENABLE(DAMAGE_TRACKING)
+        if (asyncChanges.contains(Change::Damage)) {
+            ASSERT(m_asyncState.damage.has_value());
+            layer.addDamage(*std::exchange(m_asyncState.damage, std::nullopt));
+        }
+#endif
+
+        if (asyncChanges.contains(Change::ContentsBuffer)) {
+            m_contentsBuffer.hasCommitted = !!m_asyncState.contentsBuffer;
+            layer.setContentsBuffer(WTF::move(m_asyncState.contentsBuffer));
         }
     }
 }

@@ -170,6 +170,11 @@ public:
     float contentsScale() const WTF_REQUIRES_LOCK(m_lock);
     enum class RequireComposition : bool { No, Yes };
     void setContentsBuffer(std::unique_ptr<CoordinatedPlatformLayerBuffer>&&, std::optional<Damage>&& = std::nullopt, RequireComposition = RequireComposition::Yes) WTF_REQUIRES_LOCK(m_lock);
+    // Contents that the next composition applies without waiting for a rendering update, like video frames or the
+    // scrollbars painted for the scrolling thread. Such layers only get their contents this way, except that the main
+    // thread can still replace their contents buffer, for example to clear it when the video goes away.
+    void setAsyncContentsRects(const FloatRect& contentsRect, const FloatRoundedRect& contentsClippingRect) WTF_REQUIRES_LOCK(m_lock);
+    void setAsyncContentsBuffer(std::unique_ptr<CoordinatedPlatformLayerBuffer>&&, RequireComposition = RequireComposition::Yes) WTF_REQUIRES_LOCK(m_lock);
 #if ENABLE(VIDEO) && USE(GSTREAMER_GL)
     void replaceCurrentContentsBufferWithCopy();
 #endif
@@ -236,10 +241,16 @@ private:
     bool needsBackingStore() const;
     void purgeBackingStores();
 
+    void assertCanChangeContentsForRenderingUpdate() const;
 #if ENABLE(DAMAGE_TRACKING)
     void addDamage(Damage&&) WTF_REQUIRES_LOCK(m_lock);
+    std::optional<Damage> wholeLayerDamage() const WTF_REQUIRES_LOCK(m_lock);
 #endif
     void damageWholeLayer() WTF_REQUIRES_LOCK(m_lock);
+#if !USE(TEXTURE_MAPPER)
+    void damageWholeLayerAsync() WTF_REQUIRES_LOCK(m_lock);
+    void dropAsyncContentsBuffer() WTF_REQUIRES_LOCK(m_lock);
+#endif
 
 #if USE(TEXTURE_MAPPER)
     void flushCompositingStateOnTarget(const OptionSet<CompositionReason>&, TextureMapperLayer&);
@@ -348,6 +359,19 @@ private:
         std::unique_ptr<CoordinatedPlatformLayerBuffer> committed;
         bool hasCommitted { false };
     } m_contentsBuffer WTF_GUARDED_BY_LOCK(m_lock);
+#if !USE(TEXTURE_MAPPER)
+    // Contents changed off the main thread, by the scrolling thread for scrollbars or by a media player for video
+    // frames. They don't belong to a rendering update, so every composition applies them.
+    struct {
+        EnumSet<Change> changes;
+        FloatRect contentsRect;
+        FloatRoundedRect contentsClippingRect;
+        std::unique_ptr<CoordinatedPlatformLayerBuffer> contentsBuffer;
+#if ENABLE(DAMAGE_TRACKING)
+        std::optional<Damage> damage;
+#endif
+    } m_asyncState WTF_GUARDED_BY_LOCK(m_lock);
+#endif
     struct {
         Path path;
         WindRule windRule;
