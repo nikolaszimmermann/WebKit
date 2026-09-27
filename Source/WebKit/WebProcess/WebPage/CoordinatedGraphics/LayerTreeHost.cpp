@@ -442,25 +442,31 @@ void LayerTreeHost::didRenderFrame()
 void LayerTreeHost::requestCompositionForRenderingUpdate()
 {
     m_isWaitingForRenderer = true;
-    m_compositor->requestCompositionForRenderingUpdate([this] {
-        WTFBeginSignpost(this, DidComposite);
-
-        if (!m_pendingForceRepaint && m_forcedRepaintAsyncCallback)
-            m_forcedRepaintAsyncCallback();
-
-        m_isWaitingForRenderer = false;
-        bool scheduledWhileWaitingForRenderer = std::exchange(m_scheduledWhileWaitingForRenderer, false);
-        if (m_pendingForceRepaint) {
-            if (!m_layerTreeStateIsFrozen)
-                updateRenderingWithForcedRepaint();
-            else if (m_forcedRepaintAsyncCallback)
-                m_forcedRepaintAsyncCallback();
-        } else if (!m_isSuspended && !m_layerTreeStateIsFrozen && scheduledWhileWaitingForRenderer)
-            scheduleRenderingUpdateRunLoopObserver();
-
-        WTFEndSignpost(this, DidComposite);
-    });
+    m_compositor->requestCompositionForRenderingUpdate(++m_renderingUpdateID);
     WTFEmitSignpost(this, RequestCompositionForRenderingUpdate);
+}
+
+void LayerTreeHost::compositorProgressDidChange()
+{
+    if (!m_isWaitingForRenderer || m_compositor->lastPaintedRenderingUpdateID() < m_renderingUpdateID)
+        return;
+
+    WTFBeginSignpost(this, DidComposite);
+
+    if (!m_pendingForceRepaint && m_forcedRepaintAsyncCallback)
+        m_forcedRepaintAsyncCallback();
+
+    m_isWaitingForRenderer = false;
+    bool scheduledWhileWaitingForRenderer = std::exchange(m_scheduledWhileWaitingForRenderer, false);
+    if (m_pendingForceRepaint) {
+        if (!m_layerTreeStateIsFrozen)
+            updateRenderingWithForcedRepaint();
+        else if (m_forcedRepaintAsyncCallback)
+            m_forcedRepaintAsyncCallback();
+    } else if (!m_isSuspended && !m_layerTreeStateIsFrozen && scheduledWhileWaitingForRenderer)
+        scheduleRenderingUpdateRunLoopObserver();
+
+    WTFEndSignpost(this, DidComposite);
 }
 
 #if PLATFORM(GTK)

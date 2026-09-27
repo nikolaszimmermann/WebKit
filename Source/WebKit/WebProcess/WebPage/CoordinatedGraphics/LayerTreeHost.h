@@ -75,6 +75,7 @@ public:
 
     void willRenderFrame();
     void didRenderFrame();
+    void compositorProgressDidChange();
 
 #if ENABLE(DAMAGE_TRACKING)
     void notifyFrameDamageForTesting(WebCore::Region&&);
@@ -144,6 +145,7 @@ private:
     bool m_waitUntilPaintingComplete { false };
     bool m_isWaitingForRenderer { false };
     bool m_scheduledWhileWaitingForRenderer { false };
+    uint64_t m_renderingUpdateID { 0 };
     bool m_forceFrameSync { false };
     bool m_compositionRequired { false };
 #if ENABLE(SCROLLING_THREAD)

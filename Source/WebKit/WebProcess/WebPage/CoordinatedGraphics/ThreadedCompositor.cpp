@@ -189,7 +189,6 @@ void ThreadedCompositor::invalidate()
     {
         Locker locker { m_state.lock };
         stopRenderTimer();
-        m_state.didCompositeRenderingUpdateFunction = nullptr;
         m_state.state = State::Invalidated;
     }
 
@@ -579,7 +578,7 @@ void ThreadedCompositor::renderLayerTree()
         return;
 
     OptionSet<CompositionReason> reasons;
-    bool shouldNotifiyDidComposite = false;
+    std::optional<uint64_t> renderingUpdateID;
     {
         Locker locker { m_state.lock };
 
@@ -597,7 +596,7 @@ void ThreadedCompositor::renderLayerTree()
                 reasons.remove(CompositionReason::RenderingUpdate);
                 m_state.reasons.add(CompositionReason::RenderingUpdate);
             } else
-                shouldNotifiyDidComposite = !!m_state.didCompositeRenderingUpdateFunction;
+                renderingUpdateID = m_state.renderingUpdateID;
         }
 
         ASSERT(m_state.state == State::Scheduled);
@@ -644,8 +643,10 @@ void ThreadedCompositor::renderLayerTree()
 
     updateFPSCounter();
 
-    if (shouldNotifiyDidComposite)
+    if (renderingUpdateID) {
+        m_lastPaintedRenderingUpdateID.store(*renderingUpdateID);
         m_didCompositeRunLoopObserver->schedule(&RunLoop::mainSingleton());
+    }
 
     WTFEmitSignpost(this, DidRenderFrame, "reasons: %s", reasonsToString(reasons).ascii().data());
 
@@ -665,13 +666,13 @@ void ThreadedCompositor::renderLayerTree()
     });
 }
 
-void ThreadedCompositor::requestCompositionForRenderingUpdate(Function<void()>&& didCompositeFunction)
+void ThreadedCompositor::requestCompositionForRenderingUpdate(uint64_t renderingUpdateID)
 {
     ASSERT(RunLoop::isMain());
     Locker locker { m_state.lock };
     m_state.reasons.add(CompositionReason::RenderingUpdate);
-    ASSERT(!m_state.didCompositeRenderingUpdateFunction);
-    m_state.didCompositeRenderingUpdateFunction = WTF::move(didCompositeFunction);
+    ASSERT(renderingUpdateID > m_state.renderingUpdateID);
+    m_state.renderingUpdateID = renderingUpdateID;
     if (m_sceneState->hasPendingTiles())
         m_state.isWaitingForTiles = true;
     scheduleUpdateLocked();
@@ -759,13 +760,8 @@ RunLoop* ThreadedCompositor::runLoop()
 void ThreadedCompositor::didCompositeRunLoopObserverFired()
 {
     m_didCompositeRunLoopObserver->invalidate();
-    Function<void()> didCompositeFunction;
-    {
-        Locker locker { m_state.lock };
-        didCompositeFunction = std::exchange(m_state.didCompositeRenderingUpdateFunction, nullptr);
-    }
-    if (didCompositeFunction)
-        didCompositeFunction();
+    if (m_layerTreeHost)
+        m_layerTreeHost->compositorProgressDidChange();
 }
 
 void ThreadedCompositor::updateSceneAttributes(const IntSize& size, float deviceScaleFactor)

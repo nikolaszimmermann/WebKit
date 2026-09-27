@@ -89,7 +89,8 @@ public:
 #endif
 
     void setSize(const WebCore::IntSize&, float);
-    void requestCompositionForRenderingUpdate(Function<void()>&&);
+    void requestCompositionForRenderingUpdate(uint64_t renderingUpdateID);
+    uint64_t lastPaintedRenderingUpdateID() const { return m_lastPaintedRenderingUpdateID.load(); }
     void requestComposition(WebCore::CompositionReason);
     RunLoop* runLoop();
 
@@ -186,8 +187,10 @@ private:
         bool isRenderTimerActive WTF_GUARDED_BY_LOCK(lock) { false };
         bool isWaitingForTiles WTF_GUARDED_BY_LOCK(lock) { false };
         OptionSet<WebCore::CompositionReason> reasons WTF_GUARDED_BY_LOCK(lock);
-        Function<void()> didCompositeRenderingUpdateFunction WTF_GUARDED_BY_LOCK(lock);
+        uint64_t renderingUpdateID WTF_GUARDED_BY_LOCK(lock) { 0 };
     } m_state;
+
+    std::atomic<uint64_t> m_lastPaintedRenderingUpdateID { 0 };
 
     struct {
         Lock lock;
