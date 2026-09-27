@@ -29,6 +29,8 @@
 
 #if USE(COORDINATED_GRAPHICS)
 #include <atomic>
+#include <wtf/Condition.h>
+#include <wtf/Lock.h>
 #include <wtf/SharedTask.h>
 #include <wtf/ThreadSafeRefCounted.h>
 #include <wtf/TZoneMallocInlines.h>
@@ -48,18 +50,31 @@ public:
 
     void willPaintTile() { ++m_pendingTiles; }
 
-    // Called from the painting threads. The last tile to finish runs the task.
+    // Called from the painting threads. The last tile to finish wakes up the waiters and runs the task.
     void didPaintTile()
     {
         ASSERT(m_pendingTiles.load());
         if (--m_pendingTiles)
             return;
 
+        {
+            Locker locker { m_lock };
+            m_condition.notifyAll();
+        }
+
         if (m_didPaintAllTiles)
             m_didPaintAllTiles->run();
     }
 
     bool hasPendingTiles() const { return !!m_pendingTiles.load(); }
+
+    void waitUntilAllTilesArePainted()
+    {
+        Locker locker { m_lock };
+        m_condition.wait(m_lock, [this] {
+            return !m_pendingTiles.load();
+        });
+    }
 
 private:
     explicit CoordinatedTileCounter(RefPtr<DidPaintAllTilesTask>&& didPaintAllTiles)
@@ -68,6 +83,9 @@ private:
     }
 
     std::atomic<unsigned> m_pendingTiles { 0 };
+    // Only used to wait for the last tile.
+    Lock m_lock;
+    Condition m_condition;
     const RefPtr<DidPaintAllTilesTask> m_didPaintAllTiles;
 };
 

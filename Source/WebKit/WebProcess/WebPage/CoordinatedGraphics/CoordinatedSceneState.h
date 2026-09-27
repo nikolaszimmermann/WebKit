@@ -29,6 +29,7 @@
 #include <WebCore/CoordinatedCompositionReason.h>
 #include <WebCore/CoordinatedTileCounter.h>
 #include <atomic>
+#include <wtf/Deque.h>
 #include <wtf/HashSet.h>
 #include <wtf/Vector.h>
 #include <wtf/Lock.h>
@@ -58,9 +59,12 @@ public:
     bool flush();
     void flushPendingState();
 
+    // Applying only the oldest transaction per composition shows every rendering update.
+    enum class ApplyTransactions : bool { OldestReady, AllReady };
     using LayersWithPendingTileUpdates = Vector<Ref<WebCore::CoordinatedPlatformLayer>, 16>;
-    LayersWithPendingTileUpdates applyLayerState(const OptionSet<WebCore::CompositionReason>&);
+    LayersWithPendingTileUpdates applyLayerState(const OptionSet<WebCore::CompositionReason>&, ApplyTransactions);
     void processPendingTileUpdates(LayersWithPendingTileUpdates&&);
+    // Applies all the transactions that are ready.
     void flushCompositingState(const OptionSet<WebCore::CompositionReason>&);
     void invalidate();
 
@@ -77,25 +81,37 @@ public:
 private:
     CoordinatedSceneState();
 
-    void commitPendingLayers();
+    // Everything the main thread committed with one rendering update. flush() builds it on the main thread, and the
+    // compositor applies it once all the tiles painted for it are done.
+    struct Transaction {
+        uint64_t id { 0 };
+        RefPtr<WebCore::CoordinatedTileCounter> tileCounter;
+        std::optional<HashSet<Ref<WebCore::CoordinatedPlatformLayer>>> layers;
+        HashSet<Ref<WebCore::CoordinatedPlatformLayer>> layersToRemove;
+        Vector<Ref<WebCore::CoordinatedPlatformLayer>> changedLayers;
+    };
+    bool firstTransactionHasPendingTiles() const WTF_REQUIRES_LOCK(m_transactionsLock);
+    std::optional<Transaction> takeFirstReadyTransaction();
+    void applyLayerSetChanges(Transaction&);
+    void applyTransaction(Transaction&&);
 
     const Ref<WebCore::CoordinatedPlatformLayer> m_rootLayer;
     Lock m_layersLock;
     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_layers WTF_GUARDED_BY_LOCK(m_layersLock);
     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_layersToRemove;
-    Lock m_pendingLayersLock;
-    HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_pendingLayers WTF_GUARDED_BY_LOCK(m_pendingLayersLock);
-    HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_pendingLayersToRemove WTF_GUARDED_BY_LOCK(m_pendingLayersLock);
     std::atomic<bool> m_didChangeLayers { false };
     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_committedLayers;
     Lock m_stateLock;
 
-    // Tiles are counted per rendering update. m_tileCounter belongs to the update being built on the main
-    // thread, and flush() turns it into m_committedTileCounter, which the compositor waits for.
+    uint64_t m_lastTransactionID { 0 };
+    mutable Lock m_transactionsLock;
+    Deque<Transaction> m_transactions WTF_GUARDED_BY_LOCK(m_transactionsLock);
+
+    // Tiles are counted per rendering update. m_tileCounter belongs to the update being built on the main thread,
+    // and flush() hands it over with the transaction.
     RefPtr<WebCore::CoordinatedTileCounter::DidPaintAllTilesTask> m_didPaintAllTilesTask;
     Ref<WebCore::CoordinatedTileCounter> m_tileCounter;
-    mutable Lock m_committedTileCounterLock;
-    RefPtr<WebCore::CoordinatedTileCounter> m_committedTileCounter WTF_GUARDED_BY_LOCK(m_committedTileCounterLock);
+    RefPtr<WebCore::CoordinatedTileCounter> m_lastCommittedTileCounter;
 };
 
 } // namespace WebKit

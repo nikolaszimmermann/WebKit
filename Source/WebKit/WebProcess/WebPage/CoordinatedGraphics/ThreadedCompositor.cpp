@@ -632,7 +632,7 @@ void ThreadedCompositor::renderLayerTree()
     });
 
     WTFBeginSignpost(this, FlushCompositingState);
-    auto layersWithPendingTileUpdates = m_sceneState->applyLayerState(reasons);
+    auto layersWithPendingTileUpdates = m_sceneState->applyLayerState(reasons, CoordinatedSceneState::ApplyTransactions::OldestReady);
     if (renderingUpdateID) {
         WTFEmitSignpost(this, DidApplyRenderingUpdate);
         // From here on the compositor only reads its own layer tree, so the main thread may change the layers again.

@@ -46,8 +46,6 @@ CoordinatedSceneState::CoordinatedSceneState()
 CoordinatedSceneState::~CoordinatedSceneState()
 {
     ASSERT(m_layers.isEmpty());
-    ASSERT(m_pendingLayers.isEmpty());
-    ASSERT(m_pendingLayersToRemove.isEmpty());
     ASSERT(m_committedLayers.isEmpty());
 }
 
@@ -87,27 +85,43 @@ bool CoordinatedSceneState::flush()
 {
     ASSERT(isMainRunLoop());
 
+    Transaction transaction;
+    transaction.id = ++m_lastTransactionID;
+
     bool didChangeLayers = m_didChangeLayers.exchange(false);
     if (didChangeLayers) {
-        Locker pendingLayersLock { m_pendingLayersLock };
         {
             Locker locker { m_layersLock };
-            m_pendingLayers = m_layers;
+            transaction.layers = m_layers;
         }
-        if (m_pendingLayersToRemove.isEmpty())
-            m_pendingLayersToRemove = WTF::move(m_layersToRemove);
-        else
-            m_pendingLayersToRemove.addAll(std::exchange(m_layersToRemove, { }));
+        transaction.layersToRemove = std::exchange(m_layersToRemove, { });
     }
 
     flushPendingState();
 
+#if !USE(TEXTURE_MAPPER)
+    if (m_rootLayer->commitChanges(transaction.id))
+        transaction.changedLayers.append(m_rootLayer);
     {
-        Locker locker { m_committedTileCounterLock };
-        m_committedTileCounter = std::exchange(m_tileCounter, CoordinatedTileCounter::create(m_didPaintAllTilesTask.copyRef()));
+        Locker locker { m_layersLock };
+        for (Ref layer : m_layers) {
+            if (layer->commitChanges(transaction.id))
+                transaction.changedLayers.append(WTF::move(layer));
+        }
     }
+#endif
 
-    return didChangeLayers;
+    // Without the Skia compositor the layer changes aren't part of the transaction, but the compositor still has to wait
+    // for the tiles painted during this rendering update.
+    if (!didChangeLayers && transaction.changedLayers.isEmpty() && !m_tileCounter->hasPendingTiles())
+        return false;
+
+    m_lastCommittedTileCounter = std::exchange(m_tileCounter, CoordinatedTileCounter::create(m_didPaintAllTilesTask.copyRef()));
+    transaction.tileCounter = m_lastCommittedTileCounter;
+
+    Locker locker { m_transactionsLock };
+    m_transactions.append(WTF::move(transaction));
+    return true;
 }
 
 void CoordinatedSceneState::flushPendingState()
@@ -118,26 +132,55 @@ void CoordinatedSceneState::flushPendingState()
         layer->flushPendingState();
 }
 
-void CoordinatedSceneState::commitPendingLayers()
+void CoordinatedSceneState::applyLayerSetChanges(Transaction& transaction)
 {
-    ASSERT(!isMainRunLoop());
-    Locker pendingLayersLock { m_pendingLayersLock };
-    while (!m_pendingLayersToRemove.isEmpty()) {
-        auto layer = m_pendingLayersToRemove.takeAny();
+    for (auto& layer : transaction.layersToRemove)
         layer->invalidateTarget();
-    }
 
-    if (!m_pendingLayers.isEmpty())
-        m_committedLayers = WTF::move(m_pendingLayers);
+    if (transaction.layers)
+        m_committedLayers = WTF::move(*transaction.layers);
 }
 
-auto CoordinatedSceneState::applyLayerState(const OptionSet<CompositionReason>& reasons) -> LayersWithPendingTileUpdates
+void CoordinatedSceneState::applyTransaction(Transaction&& transaction)
+{
+    ASSERT(!isMainRunLoop());
+    applyLayerSetChanges(transaction);
+
+#if !USE(TEXTURE_MAPPER)
+    for (auto& layer : transaction.changedLayers)
+        layer->applyCommittedChanges(transaction.id);
+#endif
+}
+
+bool CoordinatedSceneState::firstTransactionHasPendingTiles() const
+{
+    return !m_transactions.isEmpty() && m_transactions.first().tileCounter->hasPendingTiles();
+}
+
+auto CoordinatedSceneState::takeFirstReadyTransaction() -> std::optional<Transaction>
+{
+    // A transaction can only be applied once all the tiles painted for it are done, and the ones after it have to wait.
+    Locker locker { m_transactionsLock };
+    if (m_transactions.isEmpty() || firstTransactionHasPendingTiles())
+        return std::nullopt;
+    return m_transactions.takeFirst();
+}
+
+auto CoordinatedSceneState::applyLayerState(const OptionSet<CompositionReason>& reasons, ApplyTransactions applyTransactions) -> LayersWithPendingTileUpdates
 {
     // Animations run on the compositor's own layers, so there is nothing to apply for them.
     if (reasons.hasExactlyOneBitSet() && reasons.contains(CompositionReason::Animation))
         return { };
 
-    commitPendingLayers();
+    // Rendering updates apply the transactions whose tiles are painted, and the other compositions only apply the
+    // changes made off the main thread.
+    if (reasons.contains(CompositionReason::RenderingUpdate)) {
+        while (auto transaction = takeFirstReadyTransaction()) {
+            applyTransaction(WTF::move(*transaction));
+            if (applyTransactions == ApplyTransactions::OldestReady)
+                break;
+        }
+    }
 
     {
         Locker stateLock { m_stateLock };
@@ -164,13 +207,20 @@ void CoordinatedSceneState::processPendingTileUpdates(LayersWithPendingTileUpdat
 
 void CoordinatedSceneState::flushCompositingState(const OptionSet<CompositionReason>& reasons)
 {
-    processPendingTileUpdates(applyLayerState(reasons));
+    processPendingTileUpdates(applyLayerState(reasons, ApplyTransactions::AllReady));
 }
 
 void CoordinatedSceneState::invalidateCommittedLayers()
 {
     ASSERT(!isMainRunLoop());
-    commitPendingLayers();
+    Deque<Transaction> transactions;
+    {
+        Locker locker { m_transactionsLock };
+        transactions = std::exchange(m_transactions, { });
+    }
+    for (auto& transaction : transactions)
+        applyLayerSetChanges(transaction);
+
     m_rootLayer->invalidateTarget();
     while (!m_committedLayers.isEmpty()) {
         auto layer = m_committedLayers.takeAny();
@@ -190,17 +240,25 @@ void CoordinatedSceneState::invalidate()
     for (Ref layer : layers)
         layer->invalidateClient();
 
-    Locker pendingLayersLock { m_pendingLayersLock };
-    m_pendingLayers = { };
-    m_pendingLayersToRemove = { };
+    Locker locker { m_transactionsLock };
+    m_transactions.clear();
 }
 
 void CoordinatedSceneState::waitUntilPaintingComplete()
 {
     ASSERT(isMainRunLoop());
-    Locker pendingLayersLock { m_pendingLayersLock };
-    for (auto& layer : m_pendingLayers)
+#if USE(TEXTURE_MAPPER)
+    HashSet<Ref<CoordinatedPlatformLayer>> layers;
+    {
+        Locker locker { m_layersLock };
+        layers = m_layers;
+    }
+    for (auto& layer : layers)
         layer->waitUntilPaintingComplete();
+#else
+    if (m_lastCommittedTileCounter)
+        m_lastCommittedTileCounter->waitUntilAllTilesArePainted();
+#endif
 }
 
 void CoordinatedSceneState::setDidPaintAllTilesTask(Ref<CoordinatedTileCounter::DidPaintAllTilesTask>&& task)
@@ -220,8 +278,8 @@ Ref<CoordinatedTileCounter> CoordinatedSceneState::willPaintTile()
 
 bool CoordinatedSceneState::hasPendingTiles() const
 {
-    Locker locker { m_committedTileCounterLock };
-    return m_committedTileCounter && m_committedTileCounter->hasPendingTiles();
+    Locker locker { m_transactionsLock };
+    return firstTransactionHasPendingTiles();
 }
 
 } // namespace WebKit

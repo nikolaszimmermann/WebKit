@@ -52,6 +52,66 @@
 
 namespace WebCore {
 
+#if !USE(TEXTURE_MAPPER)
+// The layer changes committed with one rendering update, see commitChanges().
+struct CoordinatedPlatformLayer::CommittedChanges {
+    WTF_MAKE_TZONE_ALLOCATED_INLINE(CommittedChanges);
+public:
+    uint64_t transactionID { 0 };
+    EnumSet<Change> changes;
+    PositionUpdates positionUpdates;
+    // Most rendering updates only repaint a layer, so its other properties are only copied when one of them changed.
+    std::unique_ptr<CommittedProperties> properties;
+    std::optional<CoordinatedBackingStoreProxy::Update> tileUpdate;
+    float contentsScale { 1 };
+    std::unique_ptr<CoordinatedPlatformLayerBuffer> contentsBuffer;
+#if ENABLE(DAMAGE_TRACKING)
+    std::optional<Damage> damage;
+#endif
+};
+
+struct CoordinatedPlatformLayer::CommittedProperties {
+    WTF_MAKE_TZONE_ALLOCATED_INLINE(CommittedProperties);
+public:
+    FloatPoint3D anchorPoint;
+    FloatSize size;
+    TransformationMatrix transform;
+    TransformationMatrix childrenTransform;
+    bool masksToBounds { false };
+    bool preserves3D { false };
+    bool backfaceVisibility { true };
+    Color backgroundColor;
+    float opacity { 1 };
+    BlendMode blendMode { BlendMode::Normal };
+    bool contentsVisible { true };
+    bool contentsOpaque { false };
+    FloatRect contentsRect;
+    bool contentsRectClipsDescendants { false };
+    FloatRoundedRect contentsClippingRect;
+    Path contentsClipShapePath;
+    Color contentsColor;
+    FloatSize contentsTileSize;
+    FloatSize contentsTilePhase;
+    RefPtr<CoordinatedImageBackingStore> imageBackingStore;
+    Path clipPath;
+    WindRule clipPathWindRule { WindRule::NonZero };
+    FilterOperations filters;
+    RefPtr<CoordinatedPlatformLayer> mask;
+    RefPtr<CoordinatedPlatformLayer> replica;
+    FilterOperations backdropFilters;
+    FloatRoundedRect backdropRect;
+    Path backdropShapePath;
+    bool isBackdropRoot { false };
+    AcceleratedAnimations animations;
+    Color debugBorderColor;
+    float debugBorderWidth { 0 };
+    int repaintCount { -1 };
+    Vector<Ref<CoordinatedPlatformLayer>> children;
+    bool hasBackingStore { false };
+    RefPtr<CoordinatedAnimatedBackingStoreClient> animatedBackingStoreClient;
+};
+#endif
+
 Ref<CoordinatedPlatformLayer> CoordinatedPlatformLayer::create(Client& client)
 {
     return adoptRef(*new CoordinatedPlatformLayer(&client));
@@ -156,6 +216,9 @@ void CoordinatedPlatformLayer::invalidateTarget()
             m_contentsBuffer.committed = m_target->takeContentsBuffer();
 #endif
         m_contentsBuffer.hasCommitted = false;
+#if !USE(TEXTURE_MAPPER)
+        m_committedChanges.clear();
+#endif
     }
 #if USE(TEXTURE_MAPPER)
     m_target = nullptr;
@@ -1173,37 +1236,49 @@ void CoordinatedPlatformLayer::flushPositionChanges(const OptionSet<CompositionR
     if (!reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::AsyncScrolling }))
         return;
 
-    Locker locker { m_lock };
-    auto applyPositionUpdates = [this](PositionUpdates& positionUpdates) {
-        assertIsHeld(m_lock);
-        if (auto position = std::exchange(positionUpdates.position, std::nullopt); position && position->generation > m_appliedPositionGeneration) {
-            ensureTarget().setPosition(position->value);
-            m_appliedPositionGeneration = position->generation;
-        }
+    PositionUpdates positionUpdates;
+    {
+        Locker locker { m_lock };
+#if USE(TEXTURE_MAPPER)
+        if (reasons.contains(CompositionReason::RenderingUpdate))
+            applyPositionUpdates(std::exchange(m_positionUpdatesForRenderingUpdate, { }));
+#endif
+        positionUpdates = std::exchange(m_positionUpdatesForScrolling, { });
+    }
+    applyPositionUpdates(WTF::move(positionUpdates));
+}
 
-        if (auto boundsOrigin = std::exchange(positionUpdates.boundsOrigin, std::nullopt); boundsOrigin && boundsOrigin->generation > m_appliedBoundsOriginGeneration) {
-            ensureTarget().setBoundsOrigin(boundsOrigin->value);
-            m_appliedBoundsOriginGeneration = boundsOrigin->generation;
-        }
-    };
+void CoordinatedPlatformLayer::applyPositionUpdates(PositionUpdates&& positionUpdates)
+{
+    ASSERT(!isMainThread());
+    if (positionUpdates.position && positionUpdates.position->generation > m_appliedPositionGeneration) {
+        ensureTarget().setPosition(positionUpdates.position->value);
+        m_appliedPositionGeneration = positionUpdates.position->generation;
+    }
 
-    if (reasons.contains(CompositionReason::RenderingUpdate))
-        applyPositionUpdates(m_positionUpdatesForRenderingUpdate);
-    applyPositionUpdates(m_positionUpdatesForScrolling);
+    if (positionUpdates.boundsOrigin && positionUpdates.boundsOrigin->generation > m_appliedBoundsOriginGeneration) {
+        ensureTarget().setBoundsOrigin(positionUpdates.boundsOrigin->value);
+        m_appliedBoundsOriginGeneration = positionUpdates.boundsOrigin->generation;
+    }
 }
 
 void CoordinatedPlatformLayer::flushCompositingState(const OptionSet<CompositionReason>& reasons)
 {
     ASSERT(!isMainThread());
     Locker locker { m_lock };
-    bool hasChanges = !m_pendingChanges.isEmpty();
-#if !USE(TEXTURE_MAPPER)
-    hasChanges |= !m_asyncState.changes.isEmpty();
-#endif
-    if (!hasChanges && (!reasons.contains(CompositionReason::RenderingUpdate) || !m_backingStoreProxy))
+#if USE(TEXTURE_MAPPER)
+    if (m_pendingChanges.isEmpty() && (!reasons.contains(CompositionReason::RenderingUpdate) || !m_backingStoreProxy))
         return;
 
     flushCompositingStateOnTarget(reasons, ensureTarget());
+#else
+    // The main thread's changes are applied with the rendering update that committed them, see applyCommittedChanges().
+    // While a rendering update waits for its tiles, the reasons can be empty, and then the changes made off the main thread wait too.
+    if (m_asyncState.changes.isEmpty() || !reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::AsyncScrolling }))
+        return;
+
+    applyAsyncChanges(ensureTarget());
+#endif
 }
 
 #if USE(TEXTURE_MAPPER)
@@ -1416,238 +1491,315 @@ void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<Com
 
 #else
 
-void CoordinatedPlatformLayer::flushCompositingStateOnTarget(const OptionSet<CompositionReason>& reasons, SkiaCompositingLayer& layer)
+void CoordinatedPlatformLayer::applyAsyncChanges(SkiaCompositingLayer& layer)
 {
     assertIsHeld(m_lock);
-    if (reasons.contains(CompositionReason::RenderingUpdate)) {
-        if (m_pendingChanges.contains(Change::ContentsRect)) {
-            layer.setContentsRect(m_contentsRect);
-            m_pendingChanges.remove(Change::ContentsRect);
-        }
+    auto asyncChanges = std::exchange(m_asyncState.changes, { });
+    if (asyncChanges.contains(Change::ContentsRect))
+        layer.setContentsRect(m_asyncState.contentsRect);
 
-        if (m_pendingChanges.contains(Change::ContentsClippingRect)) {
-            layer.setContentsClippingRect(m_contentsClippingRect);
-            m_pendingChanges.remove(Change::ContentsClippingRect);
-        }
-
-        if (m_pendingChanges.contains(Change::ContentsClipShapePath)) {
-            if (m_contentsClipShapePath.isEmpty())
-                layer.setContentsClipPath(std::nullopt);
-            else {
-                auto contentsClipPath = *m_contentsClipShapePath.platformPath();
-                contentsClipPath.setFillType(SkPathFillType::kWinding);
-                layer.setContentsClipPath(WTF::move(contentsClipPath));
-            }
-            m_pendingChanges.remove(Change::ContentsClipShapePath);
-        }
-
-        if (m_pendingChanges.contains(Change::ContentsImage)) {
-            layer.setImageBackingStore(m_imageBackingStore.current);
-            m_pendingChanges.remove(Change::ContentsImage);
-        }
-    }
-
-    if (reasons.contains(CompositionReason::RenderingUpdate)) {
-        if (m_pendingChanges.contains(Change::AnchorPoint)) {
-            layer.setAnchorPoint(m_anchorPoint);
-            m_pendingChanges.remove(Change::AnchorPoint);
-        }
-
-        if (m_pendingChanges.contains(Change::Size)) {
-            layer.setSize(m_size);
-            m_pendingChanges.remove(Change::Size);
-        }
-
-        if (m_pendingChanges.contains(Change::Transform)) {
-            layer.setTransform(m_transform);
-            m_pendingChanges.remove(Change::Transform);
-        }
-
-        if (m_pendingChanges.contains(Change::ChildrenTransform)) {
-            layer.setChildrenTransform(m_childrenTransform);
-            m_pendingChanges.remove(Change::ChildrenTransform);
-        }
-
-        if (m_pendingChanges.contains(Change::Preserves3D)) {
-            layer.setPreserves3D(m_preserves3D);
-            m_pendingChanges.remove(Change::Preserves3D);
-        }
-
-        if (m_pendingChanges.contains(Change::MasksToBounds)) {
-            layer.setMasksToBounds(m_masksToBounds);
-            m_pendingChanges.remove(Change::MasksToBounds);
-        }
-
-        if (m_pendingChanges.contains(Change::BackfaceVisibility)) {
-            layer.setBackfaceVisibility(m_backfaceVisibility);
-            m_pendingChanges.remove(Change::BackfaceVisibility);
-        }
-
-        if (m_pendingChanges.contains(Change::BackgroundColor)) {
-            layer.setBackgroundColor(m_backgroundColor);
-            m_pendingChanges.remove(Change::BackgroundColor);
-        }
-
-        if (m_pendingChanges.contains(Change::Opacity)) {
-            layer.setOpacity(m_opacity);
-            m_pendingChanges.remove(Change::Opacity);
-        }
-
-        if (m_pendingChanges.contains(Change::BlendMode)) {
-            layer.setBlendMode(m_blendMode);
-            m_pendingChanges.remove(Change::BlendMode);
-        }
-
-        if (m_pendingChanges.contains(Change::BackingStore)) {
-            layer.setUseBackingStore(!!m_backingStoreProxy, m_backingStoreProxy ? m_backingStoreProxy->animatedBackingStoreClient() : nullptr);
-            m_pendingChanges.remove(Change::BackingStore);
-        }
-
-        if (m_pendingChanges.contains(Change::ContentsVisible)) {
-            layer.setContentsVisible(m_contentsVisible);
-            m_pendingChanges.remove(Change::ContentsVisible);
-        }
-
-        if (m_pendingChanges.contains(Change::ContentsOpaque)) {
-            layer.setContentsOpaque(m_contentsOpaque);
-            m_pendingChanges.remove(Change::ContentsOpaque);
-        }
-
-        if (m_pendingChanges.contains(Change::ContentsRectClipsDescendants)) {
-            layer.setContentsRectClipsDescendants(m_contentsRectClipsDescendants);
-            m_pendingChanges.remove(Change::ContentsRectClipsDescendants);
-        }
-
-        if (m_pendingChanges.contains(Change::ContentsTiling)) {
-            layer.setContentsTiling(m_contentsTileSize, m_contentsTilePhase);
-            m_pendingChanges.remove(Change::ContentsTiling);
-        }
-
-        if (m_pendingChanges.contains(Change::ContentsColor)) {
-            layer.setContentsSolidColor(m_contentsColor);
-            m_pendingChanges.remove(Change::ContentsColor);
-        }
-
-        if (m_pendingChanges.contains(Change::ClipPath)) {
-            auto clipPath = *m_clipPath.path.platformPath();
-            clipPath.setFillType(m_clipPath.windRule == WindRule::EvenOdd ? SkPathFillType::kEvenOdd : SkPathFillType::kWinding);
-            layer.setClipPath(WTF::move(clipPath));
-            m_pendingChanges.remove(Change::ClipPath);
-        }
-
-        if (m_pendingChanges.contains(Change::Filters)) {
-            layer.setFilters(m_filters);
-            m_pendingChanges.remove(Change::Filters);
-        }
-
-        if (m_pendingChanges.contains(Change::Mask)) {
-            layer.setMask(m_mask ? RefPtr { &m_mask->ensureTarget() } : nullptr);
-            m_pendingChanges.remove(Change::Mask);
-        }
-
-        if (m_pendingChanges.contains(Change::Replica)) {
-            layer.setReplica(m_replica ? RefPtr { &m_replica->ensureTarget() } : nullptr);
-            m_pendingChanges.remove(Change::Replica);
-        }
-
-        // FIXME: stop creating a layer for backdrop filters when switching to SkiaCompositingLayer.
-        if (m_pendingChanges.contains(Change::Backdrop) && !m_backdrop) {
-            layer.setBackdropFilters(FilterOperations());
-            m_pendingChanges.remove(Change::Backdrop);
-        } else if (m_backdrop) {
-            Locker locker { m_backdrop->lock() };
-            if (m_pendingChanges.contains(Change::Backdrop) || m_backdrop->m_pendingChanges.contains(Change::Filters)) {
-                layer.setBackdropFilters(m_backdrop->m_filters);
-                m_pendingChanges.remove(Change::Backdrop);
-                m_backdrop->m_pendingChanges.remove(Change::Filters);
-            }
-        }
-
-        if (m_pendingChanges.contains(Change::BackdropRect)) {
-            layer.setBackdropFiltersRect(m_backdropRect);
-            m_pendingChanges.remove(Change::BackdropRect);
-        }
-
-        if (m_pendingChanges.contains(Change::BackdropShapePath)) {
-            if (m_backdropShapePath.isEmpty())
-                layer.setBackdropFiltersClipPath(std::nullopt);
-            else {
-                auto backdropClipPath = *m_backdropShapePath.platformPath();
-                backdropClipPath.setFillType(SkPathFillType::kWinding);
-                layer.setBackdropFiltersClipPath(WTF::move(backdropClipPath));
-            }
-            m_pendingChanges.remove(Change::BackdropShapePath);
-        }
-
-        if (m_pendingChanges.contains(Change::BackdropRoot)) {
-            layer.setIsBackdropRoot(m_isBackdropRoot);
-            m_pendingChanges.remove(Change::BackdropRoot);
-        }
-
-        if (m_pendingChanges.contains(Change::Animations)) {
-            layer.setAnimations(m_animations);
-            m_pendingChanges.remove(Change::Animations);
-        }
-
-        if (m_pendingChanges.contains(Change::DebugIndicators)) {
-            Color color;
-            std::optional<float> width;
-            if (m_debugBorderColor.isVisible()) {
-                color = m_debugBorderColor;
-                width = m_debugBorderWidth;
-            }
-            std::optional<unsigned> repaintCount;
-            if (m_repaintCount != -1)
-                repaintCount = m_repaintCount;
-
-            layer.setDebugIndicators(WTF::move(color), width, repaintCount);
-            m_pendingChanges.remove(Change::DebugIndicators);
-        }
-
-        if (m_pendingChanges.contains(Change::Children)) {
-            layer.setChildren(WTF::map(m_children, [](auto& child) {
-                return Ref { child->ensureTarget() };
-            }));
-            m_pendingChanges.remove(Change::Children);
-        }
-
-        if (m_backingStoreProxy)
-            layer.updateBackingStore(m_backingStoreProxy->takePendingUpdate(), m_contentsScale);
+    if (asyncChanges.contains(Change::ContentsClippingRect))
+        layer.setContentsClippingRect(m_asyncState.contentsClippingRect);
 
 #if ENABLE(DAMAGE_TRACKING)
-        if (m_pendingChanges.contains(Change::Damage)) {
-            ASSERT(m_damage.has_value());
-            layer.addDamage(*std::exchange(m_damage, std::nullopt));
-            m_pendingChanges.remove(Change::Damage);
-        }
+    if (asyncChanges.contains(Change::Damage)) {
+        ASSERT(m_asyncState.damage.has_value());
+        layer.addDamage(*std::exchange(m_asyncState.damage, std::nullopt));
+    }
 #endif
 
-        if (m_pendingChanges.contains(Change::ContentsBuffer)) {
-            m_contentsBuffer.hasCommitted = !!m_contentsBuffer.pending;
-            layer.setContentsBuffer(WTF::move(m_contentsBuffer.pending));
-            m_pendingChanges.remove(Change::ContentsBuffer);
-        }
+    if (asyncChanges.contains(Change::ContentsBuffer)) {
+        m_contentsBuffer.hasCommitted = !!m_asyncState.contentsBuffer;
+        layer.setContentsBuffer(WTF::move(m_asyncState.contentsBuffer));
+    }
+}
+
+bool CoordinatedPlatformLayer::commitChanges(uint64_t transactionID)
+{
+    ASSERT(isMainThread());
+    Locker locker { m_lock };
+
+    std::optional<CoordinatedBackingStoreProxy::Update> tileUpdate;
+    if (m_backingStoreProxy)
+        tileUpdate = m_backingStoreProxy->takePendingUpdate();
+
+    bool hasPositionUpdates = m_positionUpdatesForRenderingUpdate.position || m_positionUpdatesForRenderingUpdate.boundsOrigin;
+    if (m_pendingChanges.isEmpty() && !hasPositionUpdates && (!tileUpdate || tileUpdate->isEmpty()))
+        return false;
+
+    auto committedChanges = makeUnique<CommittedChanges>();
+    committedChanges->transactionID = transactionID;
+    auto changes = std::exchange(m_pendingChanges, { });
+    committedChanges->changes = changes;
+    committedChanges->positionUpdates = std::exchange(m_positionUpdatesForRenderingUpdate, { });
+    committedChanges->properties = commitProperties(changes);
+
+    if (tileUpdate) {
+        committedChanges->tileUpdate = WTF::move(tileUpdate);
+        committedChanges->contentsScale = m_contentsScale;
+    }
+    if (changes.contains(Change::ContentsBuffer)) {
+        m_contentsBuffer.hasCommitted = !!m_contentsBuffer.pending;
+        committedChanges->contentsBuffer = WTF::move(m_contentsBuffer.pending);
+    }
+#if ENABLE(DAMAGE_TRACKING)
+    if (changes.contains(Change::Damage))
+        committedChanges->damage = std::exchange(m_damage, std::nullopt);
+#endif
+
+    m_committedChanges.append(WTF::move(committedChanges));
+    return true;
+}
+
+auto CoordinatedPlatformLayer::commitProperties(EnumSet<Change> changes) -> std::unique_ptr<CommittedProperties>
+{
+    static constexpr EnumSet<Change> changesWithoutProperties {
+        Change::ContentsBuffer,
+#if ENABLE(DAMAGE_TRACKING)
+        Change::Damage,
+#endif
+    };
+    if (changes.containsOnly(changesWithoutProperties))
+        return nullptr;
+
+    auto properties = makeUnique<CommittedProperties>();
+    if (changes.contains(Change::AnchorPoint))
+        properties->anchorPoint = m_anchorPoint;
+    if (changes.contains(Change::Size))
+        properties->size = m_size;
+    if (changes.contains(Change::Transform))
+        properties->transform = m_transform;
+    if (changes.contains(Change::ChildrenTransform))
+        properties->childrenTransform = m_childrenTransform;
+    if (changes.contains(Change::MasksToBounds))
+        properties->masksToBounds = m_masksToBounds;
+    if (changes.contains(Change::Preserves3D))
+        properties->preserves3D = m_preserves3D;
+    if (changes.contains(Change::BackfaceVisibility))
+        properties->backfaceVisibility = m_backfaceVisibility;
+    if (changes.contains(Change::BackgroundColor))
+        properties->backgroundColor = m_backgroundColor;
+    if (changes.contains(Change::Opacity))
+        properties->opacity = m_opacity;
+    if (changes.contains(Change::BlendMode))
+        properties->blendMode = m_blendMode;
+    if (changes.contains(Change::ContentsVisible))
+        properties->contentsVisible = m_contentsVisible;
+    if (changes.contains(Change::ContentsOpaque))
+        properties->contentsOpaque = m_contentsOpaque;
+    if (changes.contains(Change::ContentsRect))
+        properties->contentsRect = m_contentsRect;
+    if (changes.contains(Change::ContentsRectClipsDescendants))
+        properties->contentsRectClipsDescendants = m_contentsRectClipsDescendants;
+    if (changes.contains(Change::ContentsClippingRect))
+        properties->contentsClippingRect = m_contentsClippingRect;
+    if (changes.contains(Change::ContentsClipShapePath))
+        properties->contentsClipShapePath = m_contentsClipShapePath;
+    if (changes.contains(Change::ContentsColor))
+        properties->contentsColor = m_contentsColor;
+    if (changes.contains(Change::ContentsTiling)) {
+        properties->contentsTileSize = m_contentsTileSize;
+        properties->contentsTilePhase = m_contentsTilePhase;
+    }
+    if (changes.contains(Change::ContentsImage))
+        properties->imageBackingStore = m_imageBackingStore.current;
+    if (changes.contains(Change::ClipPath)) {
+        properties->clipPath = m_clipPath.path;
+        properties->clipPathWindRule = m_clipPath.windRule;
+    }
+    if (changes.contains(Change::Filters))
+        properties->filters = m_filters;
+    if (changes.contains(Change::Mask))
+        properties->mask = m_mask;
+    if (changes.contains(Change::Replica))
+        properties->replica = m_replica;
+    // The owner is told about every change of the backdrop filters, see notifyBackdropFiltersChanged().
+    if (changes.contains(Change::Backdrop) && m_backdrop) {
+        Locker backdropLocker { m_backdrop->m_lock };
+        properties->backdropFilters = m_backdrop->m_filters;
+    }
+    if (changes.contains(Change::BackdropRect))
+        properties->backdropRect = m_backdropRect;
+    if (changes.contains(Change::BackdropShapePath))
+        properties->backdropShapePath = m_backdropShapePath;
+    if (changes.contains(Change::BackdropRoot))
+        properties->isBackdropRoot = m_isBackdropRoot;
+    if (changes.contains(Change::Animations))
+        properties->animations = m_animations;
+    if (changes.contains(Change::DebugIndicators)) {
+        properties->debugBorderColor = m_debugBorderColor;
+        properties->debugBorderWidth = m_debugBorderWidth;
+        properties->repaintCount = m_repaintCount;
+    }
+    if (changes.contains(Change::Children))
+        properties->children = m_children;
+    if (changes.contains(Change::BackingStore)) {
+        properties->hasBackingStore = !!m_backingStoreProxy;
+        properties->animatedBackingStoreClient = m_backingStoreProxy ? m_backingStoreProxy->animatedBackingStoreClient() : nullptr;
+    }
+    return properties;
+}
+
+void CoordinatedPlatformLayer::applyCommittedChanges(uint64_t transactionID)
+{
+    ASSERT(!isMainThread());
+    std::unique_ptr<CommittedChanges> committedChanges;
+    {
+        Locker locker { m_lock };
+        if (m_committedChanges.isEmpty())
+            return;
+
+        ASSERT(m_committedChanges.first()->transactionID >= transactionID);
+        if (m_committedChanges.first()->transactionID != transactionID)
+            return;
+
+        committedChanges = m_committedChanges.takeFirst();
     }
 
-    if (reasons.containsAny({ CompositionReason::RenderingUpdate, CompositionReason::VideoFrame, CompositionReason::AsyncScrolling })) {
-        auto asyncChanges = std::exchange(m_asyncState.changes, { });
-        if (asyncChanges.contains(Change::ContentsRect))
-            layer.setContentsRect(m_asyncState.contentsRect);
+    // Everything needed was copied at commit time, so the main thread can go on changing the layer meanwhile.
+    applyPositionUpdates(WTF::move(committedChanges->positionUpdates));
 
-        if (asyncChanges.contains(Change::ContentsClippingRect))
-            layer.setContentsClippingRect(m_asyncState.contentsClippingRect);
+    auto& layer = ensureTarget();
+    const auto& changes = committedChanges->changes;
+    if (committedChanges->properties)
+        applyCommittedProperties(changes, WTF::move(*committedChanges->properties), layer);
+
+    if (committedChanges->tileUpdate)
+        layer.updateBackingStore(WTF::move(*committedChanges->tileUpdate), committedChanges->contentsScale);
 
 #if ENABLE(DAMAGE_TRACKING)
-        if (asyncChanges.contains(Change::Damage)) {
-            ASSERT(m_asyncState.damage.has_value());
-            layer.addDamage(*std::exchange(m_asyncState.damage, std::nullopt));
-        }
+    if (changes.contains(Change::Damage)) {
+        ASSERT(committedChanges->damage.has_value());
+        layer.addDamage(WTF::move(*committedChanges->damage));
+    }
 #endif
 
-        if (asyncChanges.contains(Change::ContentsBuffer)) {
-            m_contentsBuffer.hasCommitted = !!m_asyncState.contentsBuffer;
-            layer.setContentsBuffer(WTF::move(m_asyncState.contentsBuffer));
+    if (changes.contains(Change::ContentsBuffer))
+        layer.setContentsBuffer(WTF::move(committedChanges->contentsBuffer));
+}
+
+// An empty shape means that there is no clip.
+static std::optional<SkPath> shapeClipPath(const Path& shape)
+{
+    if (shape.isEmpty())
+        return std::nullopt;
+
+    auto clipPath = *shape.platformPath();
+    clipPath.setFillType(SkPathFillType::kWinding);
+    return clipPath;
+}
+
+void CoordinatedPlatformLayer::applyCommittedProperties(EnumSet<Change> changes, CommittedProperties&& properties, SkiaCompositingLayer& layer)
+{
+    if (changes.contains(Change::ContentsRect))
+        layer.setContentsRect(properties.contentsRect);
+
+    if (changes.contains(Change::ContentsClippingRect))
+        layer.setContentsClippingRect(properties.contentsClippingRect);
+
+    if (changes.contains(Change::ContentsClipShapePath))
+        layer.setContentsClipPath(shapeClipPath(properties.contentsClipShapePath));
+
+    if (changes.contains(Change::ContentsImage))
+        layer.setImageBackingStore(properties.imageBackingStore.get());
+
+    if (changes.contains(Change::AnchorPoint))
+        layer.setAnchorPoint(properties.anchorPoint);
+
+    if (changes.contains(Change::Size))
+        layer.setSize(properties.size);
+
+    if (changes.contains(Change::Transform))
+        layer.setTransform(properties.transform);
+
+    if (changes.contains(Change::ChildrenTransform))
+        layer.setChildrenTransform(properties.childrenTransform);
+
+    if (changes.contains(Change::Preserves3D))
+        layer.setPreserves3D(properties.preserves3D);
+
+    if (changes.contains(Change::MasksToBounds))
+        layer.setMasksToBounds(properties.masksToBounds);
+
+    if (changes.contains(Change::BackfaceVisibility))
+        layer.setBackfaceVisibility(properties.backfaceVisibility);
+
+    if (changes.contains(Change::BackgroundColor))
+        layer.setBackgroundColor(properties.backgroundColor);
+
+    if (changes.contains(Change::Opacity))
+        layer.setOpacity(properties.opacity);
+
+    if (changes.contains(Change::BlendMode))
+        layer.setBlendMode(properties.blendMode);
+
+    if (changes.contains(Change::BackingStore))
+        layer.setUseBackingStore(properties.hasBackingStore, properties.animatedBackingStoreClient.get());
+
+    if (changes.contains(Change::ContentsVisible))
+        layer.setContentsVisible(properties.contentsVisible);
+
+    if (changes.contains(Change::ContentsOpaque))
+        layer.setContentsOpaque(properties.contentsOpaque);
+
+    if (changes.contains(Change::ContentsRectClipsDescendants))
+        layer.setContentsRectClipsDescendants(properties.contentsRectClipsDescendants);
+
+    if (changes.contains(Change::ContentsTiling))
+        layer.setContentsTiling(properties.contentsTileSize, properties.contentsTilePhase);
+
+    if (changes.contains(Change::ContentsColor))
+        layer.setContentsSolidColor(properties.contentsColor);
+
+    if (changes.contains(Change::ClipPath)) {
+        auto clipPath = *properties.clipPath.platformPath();
+        clipPath.setFillType(properties.clipPathWindRule == WindRule::EvenOdd ? SkPathFillType::kEvenOdd : SkPathFillType::kWinding);
+        layer.setClipPath(WTF::move(clipPath));
+    }
+
+    if (changes.contains(Change::Filters))
+        layer.setFilters(properties.filters);
+
+    if (changes.contains(Change::Mask))
+        layer.setMask(properties.mask ? RefPtr { &properties.mask->ensureTarget() } : nullptr);
+
+    if (changes.contains(Change::Replica))
+        layer.setReplica(properties.replica ? RefPtr { &properties.replica->ensureTarget() } : nullptr);
+
+    // FIXME: stop creating a layer for backdrop filters when switching to SkiaCompositingLayer.
+    if (changes.contains(Change::Backdrop))
+        layer.setBackdropFilters(properties.backdropFilters);
+
+    if (changes.contains(Change::BackdropRect))
+        layer.setBackdropFiltersRect(properties.backdropRect);
+
+    if (changes.contains(Change::BackdropShapePath))
+        layer.setBackdropFiltersClipPath(shapeClipPath(properties.backdropShapePath));
+
+    if (changes.contains(Change::BackdropRoot))
+        layer.setIsBackdropRoot(properties.isBackdropRoot);
+
+    if (changes.contains(Change::Animations))
+        layer.setAnimations(WTF::move(properties.animations));
+
+    if (changes.contains(Change::DebugIndicators)) {
+        Color color;
+        std::optional<float> width;
+        if (properties.debugBorderColor.isVisible()) {
+            color = properties.debugBorderColor;
+            width = properties.debugBorderWidth;
         }
+        std::optional<unsigned> repaintCount;
+        if (properties.repaintCount != -1)
+            repaintCount = properties.repaintCount;
+
+        layer.setDebugIndicators(WTF::move(color), width, repaintCount);
+    }
+
+    if (changes.contains(Change::Children)) {
+        layer.setChildren(WTF::map(properties.children, [](auto& child) {
+            return Ref { child->ensureTarget() };
+        }));
     }
 }
 #endif

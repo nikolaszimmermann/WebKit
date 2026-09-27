@@ -33,6 +33,7 @@
 #include "FloatSize.h"
 #include "PlatformLayerIdentifier.h"
 #include "TransformationMatrix.h"
+#include <wtf/Deque.h>
 #include <wtf/EnumSet.h>
 #include <wtf/Lock.h>
 #include <wtf/MainThread.h>
@@ -220,6 +221,14 @@ public:
     void flushPositionChanges(const OptionSet<CompositionReason>&);
     void flushCompositingState(const OptionSet<CompositionReason>&);
 
+#if !USE(TEXTURE_MAPPER)
+    // Moves the changes the main thread made since the last commit into a queue, so that the main thread can make the
+    // changes of the next rendering update before the compositor has applied these. Returns false when nothing changed.
+    bool commitChanges(uint64_t transactionID);
+    // Applies the changes committed with the given transaction to the target, if the layer changed in it.
+    void applyCommittedChanges(uint64_t transactionID);
+#endif
+
     bool hasPendingTilesCreation() const { assertIsMainThread(); return m_pendingTilesCreation; }
     bool hasPendingBackingStoreTileUpdates() const;
     void processPendingBackingStoreTileUpdates();
@@ -255,7 +264,7 @@ private:
 #if USE(TEXTURE_MAPPER)
     void flushCompositingStateOnTarget(const OptionSet<CompositionReason>&, TextureMapperLayer&);
 #else
-    void flushCompositingStateOnTarget(const OptionSet<CompositionReason>&, SkiaCompositingLayer&);
+    void applyAsyncChanges(SkiaCompositingLayer&) WTF_REQUIRES_LOCK(m_lock);
 #endif
 
     enum class Change : uint8_t {
@@ -433,6 +442,16 @@ private:
     // Accessed only from the compositor thread.
     uint64_t m_appliedPositionGeneration { 0 };
     uint64_t m_appliedBoundsOriginGeneration { 0 };
+    void applyPositionUpdates(PositionUpdates&&);
+
+#if !USE(TEXTURE_MAPPER)
+    struct CommittedProperties;
+    std::unique_ptr<CommittedProperties> commitProperties(EnumSet<Change>) WTF_REQUIRES_LOCK(m_lock);
+    void applyCommittedProperties(EnumSet<Change>, CommittedProperties&&, SkiaCompositingLayer&);
+
+    struct CommittedChanges;
+    Deque<std::unique_ptr<CommittedChanges>> m_committedChanges WTF_GUARDED_BY_LOCK(m_lock);
+#endif
 };
 
 } // namespace WebCore

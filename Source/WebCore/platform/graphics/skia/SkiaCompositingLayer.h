@@ -88,7 +88,7 @@ public:
     void setOpacity(float);
     void setBlendMode(BlendMode);
     void setContentsRect(const FloatRect& rect) { m_contentsRect = rect; }
-    void setAnimations(const AcceleratedAnimations& animations) { m_animations = animations; }
+    void setAnimations(AcceleratedAnimations&& animations) { m_animations = WTF::move(animations); }
     void setContentsTiling(const FloatSize& size, const FloatSize& phase) { m_contentsTiling = { size, phase }; }
     void setClipPath(SkPath&& clipPath) { m_clipPath = WTF::move(clipPath); }
     void setMask(RefPtr<SkiaCompositingLayer>&&);
