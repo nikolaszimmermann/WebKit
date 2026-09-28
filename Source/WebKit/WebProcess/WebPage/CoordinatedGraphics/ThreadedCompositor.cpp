@@ -626,8 +626,14 @@ void ThreadedCompositor::renderLayerTree()
     }
 
     auto viewportSize = m_attributes.viewportSize;
-    if (viewportSize.isEmpty())
+    if (viewportSize.isEmpty()) {
+        // Nothing is painted and no frame is sent, so nothing would complete this frame. Do it here, otherwise the main
+        // thread keeps waiting for this rendering update and no later composition starts.
+        if (renderingUpdateID)
+            didPaintRenderingUpdate(*renderingUpdateID);
+        frameComplete();
         return;
+    }
 
     TransformationMatrix viewportTransform;
     viewportTransform.scale(m_attributes.deviceScaleFactor);
@@ -649,14 +655,8 @@ void ThreadedCompositor::renderLayerTree()
 
     updateFPSCounter();
 
-    if (renderingUpdateID) {
-        m_lastPaintedRenderingUpdateID.store(*renderingUpdateID);
-        if (m_isWaitingForPaintedRenderingUpdate.load()) {
-            Locker locker { m_paintedRenderingUpdateLock };
-            m_paintedRenderingUpdateCondition.notifyAll();
-        }
-        m_didCompositeRunLoopObserver->schedule(&RunLoop::mainSingleton());
-    }
+    if (renderingUpdateID)
+        didPaintRenderingUpdate(*renderingUpdateID);
 
     WTFEmitSignpost(this, DidRenderFrame, "reasons: %s", reasonsToString(reasons).ascii().data());
 
@@ -674,6 +674,17 @@ void ThreadedCompositor::renderLayerTree()
         if (m_layerTreeHost)
             m_layerTreeHost->didRenderFrame();
     });
+}
+
+void ThreadedCompositor::didPaintRenderingUpdate(uint64_t renderingUpdateID)
+{
+    ASSERT(m_workQueue->runLoop().isCurrent());
+    m_lastPaintedRenderingUpdateID.store(renderingUpdateID);
+    if (m_isWaitingForPaintedRenderingUpdate.load()) {
+        Locker locker { m_paintedRenderingUpdateLock };
+        m_paintedRenderingUpdateCondition.notifyAll();
+    }
+    m_didCompositeRunLoopObserver->schedule(&RunLoop::mainSingleton());
 }
 
 void ThreadedCompositor::requestCompositionForRenderingUpdate()

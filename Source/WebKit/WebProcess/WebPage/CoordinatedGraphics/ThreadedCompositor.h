@@ -145,6 +145,7 @@ private:
     TargetContents paintToSkiaCanvas(const WebCore::TransformationMatrix&, const WebCore::IntSize&, const OptionSet<WebCore::CompositionReason>&);
 #endif
     void frameComplete();
+    void didPaintRenderingUpdate(uint64_t renderingUpdateID);
 
     void didCompositeRunLoopObserverFired();
 
