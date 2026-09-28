@@ -97,17 +97,15 @@ std::optional<uint64_t> CoordinatedSceneState::flush(ForceTransaction forceTrans
         transaction.layersToRemove = std::exchange(m_layersToRemove, { });
     }
 
-    flushPendingState();
+    auto layers = this->layers();
+    flushPendingState(layers);
 
 #if !USE(TEXTURE_MAPPER)
     if (m_rootLayer->commitChanges(transaction.id))
         transaction.changedLayers.append(m_rootLayer);
-    {
-        Locker locker { m_layersLock };
-        for (Ref layer : m_layers) {
-            if (layer->commitChanges(transaction.id))
-                transaction.changedLayers.append(WTF::move(layer));
-        }
+    for (auto& layer : layers) {
+        if (layer->commitChanges(transaction.id))
+            transaction.changedLayers.append(layer);
     }
 #endif
 
@@ -135,11 +133,21 @@ void CoordinatedSceneState::setViewportSize(const IntSize& size, float deviceSca
     m_viewportSize = ViewportSize { size, deviceScaleFactor };
 }
 
+Vector<Ref<CoordinatedPlatformLayer>> CoordinatedSceneState::layers() const
+{
+    Locker locker { m_layersLock };
+    return copyToVector(m_layers);
+}
+
 void CoordinatedSceneState::flushPendingState()
 {
+    flushPendingState(layers());
+}
+
+void CoordinatedSceneState::flushPendingState(const Vector<Ref<CoordinatedPlatformLayer>>& layers)
+{
     Locker stateLock { m_stateLock };
-    Locker layersLock { m_layersLock };
-    for (Ref layer : m_layers)
+    for (auto& layer : layers)
         layer->flushPendingState();
 }
 
@@ -267,12 +275,7 @@ void CoordinatedSceneState::waitUntilPaintingComplete()
 {
     ASSERT(isMainRunLoop());
 #if USE(TEXTURE_MAPPER)
-    HashSet<Ref<CoordinatedPlatformLayer>> layers;
-    {
-        Locker locker { m_layersLock };
-        layers = m_layers;
-    }
-    for (auto& layer : layers)
+    for (auto& layer : layers())
         layer->waitUntilPaintingComplete();
 #else
     if (m_lastCommittedTileCounter)

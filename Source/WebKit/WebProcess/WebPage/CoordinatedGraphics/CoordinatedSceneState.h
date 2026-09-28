@@ -110,13 +110,17 @@ private:
         Vector<Ref<WebCore::CoordinatedPlatformLayer>> changedLayers;
         std::optional<ViewportSize> viewportSize;
     };
+    Vector<Ref<WebCore::CoordinatedPlatformLayer>> layers() const;
+    void flushPendingState(const Vector<Ref<WebCore::CoordinatedPlatformLayer>>&);
     bool firstTransactionHasPendingTiles() const WTF_REQUIRES_LOCK(m_transactionsLock);
     std::optional<Transaction> takeFirstReadyTransaction();
     void applyLayerSetChanges(Transaction&);
     void applyTransaction(Transaction&&);
 
     const Ref<WebCore::CoordinatedPlatformLayer> m_rootLayer;
-    Lock m_layersLock;
+    // Never hold this lock while locking a layer. The main thread adds and removes layers while it holds the lock of
+    // another layer.
+    mutable Lock m_layersLock;
     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_layers WTF_GUARDED_BY_LOCK(m_layersLock);
     HashSet<Ref<WebCore::CoordinatedPlatformLayer>> m_layersToRemove;
     std::atomic<bool> m_didChangeLayers { false };
