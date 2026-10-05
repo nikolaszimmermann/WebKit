@@ -94,11 +94,6 @@ svg/repaint/buffered-rendering-static-image.html [ ImageOnlyFailure ]
 # Unknown error (nothing rendered)
 svg/text/adding-id-on-pending-path.html            [ ImageOnlyFailure ]
 
-# Hit testing
-svg/hittest/svg-ellipse-non-scale-stroke.xhtml [ Failure ]
-svg/hittest/svg-ellipse-rect-stroke.xhtml      [ Failure ]
-svg/hittest/svg-shapes-non-scale-stroke.html   [ Failure ]
-
 ###############
 # Buggy tests #
 ###############
