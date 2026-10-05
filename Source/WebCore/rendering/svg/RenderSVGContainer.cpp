@@ -35,8 +35,8 @@
 #include "RenderTreeBuilder.h"
 #include "RenderView.h"
 #include "SVGContainerLayout.h"
-#include "SVGLayerTransformUpdater.h"
 #include "SVGRenderSupport.h"
+#include "SVGTransformLayoutScope.h"
 #include "SVGVisitedRendererTracking.h"
 #include <wtf/SetForScope.h>
 #include <wtf/StackStats.h>
@@ -75,8 +75,8 @@ void RenderSVGContainer::layout()
         SetForScope trackLayoutSizeChanges(m_isLayoutSizeChanged, updateLayoutSizeIfNeeded());
 
         ASSERT(!m_didTransformToRootUpdate);
-        SVGLayerTransformUpdater transformUpdater(*this);
-        SetForScope trackTransformChanges(m_didTransformToRootUpdate, transformUpdater.layerTransformChanged() || SVGContainerLayout::transformToRootChanged(parent()));
+        SVGTransformLayoutScope transformScope(*this);
+        SetForScope trackTransformChanges(m_didTransformToRootUpdate, transformScope.layerTransformChanged() || SVGContainerLayout::transformToRootChanged(parent()));
         layoutChildren();
     }
 

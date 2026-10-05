@@ -47,8 +47,8 @@
 #include "SVGContainerLayout.h"
 #include "SVGElementTypeHelpers.h"
 #include "SVGImage.h"
-#include "SVGLayerTransformUpdater.h"
 #include "SVGSVGElement.h"
+#include "SVGTransformLayoutScope.h"
 #include "SVGViewSpec.h"
 #include "ScrollbarUpdateScope.h"
 #include "TransformState.h"
@@ -261,8 +261,8 @@ void RenderSVGRoot::layout()
         SetForScope trackLayoutSizeChanges(m_isLayoutSizeChanged, updateLayoutSizeIfNeeded());
 
         ASSERT(!m_didTransformToRootUpdate);
-        SVGLayerTransformUpdater transformUpdater(*this);
-        SetForScope trackTransformChanges(m_didTransformToRootUpdate, transformUpdater.layerTransformChanged());
+        SVGTransformLayoutScope transformScope(*this);
+        SetForScope trackTransformChanges(m_didTransformToRootUpdate, transformScope.layerTransformChanged());
         layoutChildren();
     }
 
