@@ -88,9 +88,6 @@ svg/css/mix-blend-mode-opacity-root.svg    [ ImageOnlyFailure ]
 # Non-scaling stroke issues
 svg/repaint/non-scaling-stroke-transform-animation.html               [ ImageOnlyFailure ]
 
-# SVG <image> (buffered-rendering) issues
-svg/repaint/buffered-rendering-static-image.html [ ImageOnlyFailure ]
-
 # Unknown error (nothing rendered)
 svg/text/adding-id-on-pending-path.html            [ ImageOnlyFailure ]
 
