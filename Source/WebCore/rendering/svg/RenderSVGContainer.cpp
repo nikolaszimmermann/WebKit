@@ -232,7 +232,9 @@ bool RenderSVGContainer::nodeAtPoint(const HitTestRequest& request, HitTestResul
 
 
     for (CheckedPtr child = lastChild(); child; child = child->previousSibling()) {
-        if (!child->hasLayer() && child->nodeAtPoint(request, result, locationInContainer, adjustedLocation, hitTestAction)) {
+        if (child->hasLayer() || (hasLayer() && child->isTransformed()))
+            continue;
+        if (child->nodeAtPoint(request, result, locationInContainer, adjustedLocation, hitTestAction)) {
             updateHitTestResult(result, locationInContainer.point() - toLayoutSize(adjustedLocation));
             if (result.addNodeToListBasedTestResult(protect(child->node()).get(), request, locationInContainer, visualOverflowRect) == HitTestProgress::Stop)
                 return true;
